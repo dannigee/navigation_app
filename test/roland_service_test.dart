@@ -73,7 +73,7 @@ void main() {
       final result = service.parseResponseForTest('CAFC:CAMERA1,ON;ACK;');
       expect(result, isA<AutoFocusResponse>());
       expect((result as AutoFocusResponse).camera, 'CAMERA1');
-      expect((result as AutoFocusResponse).status, 'ON');
+      expect((result).status, 'ON');
     });
 
     test('parseResponse parses CPTS correctly', () {
