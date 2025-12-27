@@ -101,5 +101,9 @@ void main() {
       expect(result, isA<MeterResponse>());
       expect((result as MeterResponse).levels, ['-INF', '-80', '0']);
     });
+
+    test('parseResponse throws on invalid int', () {
+      expect(() => service.parseResponseForTest('VFL:abc;ACK;'), throwsA(isA<RolandException>()));
+    });
   });
 }

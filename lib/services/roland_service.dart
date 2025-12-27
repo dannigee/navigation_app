@@ -32,6 +32,12 @@ enum TiltDirection { down, stop, up }
 enum ZoomDirection { wideFast, wideSlow, stop, teleSlow, teleFast }
 enum FocusDirection { near, stop, far }
 
+/// Constants for command strings.
+const String onString = 'ON';
+const String offString = 'OFF';
+const String ackString = 'ACK';
+const String nackString = 'NACK';
+
 /// Response models for parsed responses.
 class FaderLevelResponse {
   final int level;
@@ -470,7 +476,7 @@ mixin VideoCommands {
   Future<void> getAutoTransitionStatus() => _sendCommand(_buildCommand('QATG'));
 
   /// Sets freeze.
-  Future<void> setFreeze(bool on) => _sendCommand(_buildCommand('FRZ', [on ? 'ON' : 'OFF']));
+  Future<void> setFreeze(bool on) => _sendCommand(_buildCommand('FRZ', [on ? onString : offString]));
 
   /// Toggles freeze.
   Future<void> toggleFreeze() => _sendCommand(_buildCommand('FRZ'));
@@ -1187,6 +1193,8 @@ class RolandService with
   bool _autoReconnect = false;
   int _maxReconnectAttempts = 3;
   Duration _reconnectDelay = const Duration(seconds: 5);
+  final Duration _minCommandInterval = const Duration(milliseconds: 10);
+  DateTime _lastCommandTime = DateTime.now();
 
   RolandService({required this.host, this.port = defaultPort, this.useSSL = false, this.connectTimeout = defaultConnectTimeout, this.ackTimeout = defaultAckTimeout, this.commandRetryDelay = defaultCommandRetryDelay}) {
     // Validate host
@@ -1271,7 +1279,21 @@ class RolandService with
     }
     // Auto-reconnect if enabled
     if (_autoReconnect && !_isConnected) {
-      Timer(_reconnectDelay, () => reconnect());
+      _attemptReconnect();
+    }
+  }
+
+  /// Attempts to reconnect with retries.
+  void _attemptReconnect() async {
+    for (int i = 0; i < _maxReconnectAttempts; i++) {
+      try {
+        await connect(retryCount: 0); // No internal retries
+        return;
+      } catch (e) {
+        if (i < _maxReconnectAttempts - 1) {
+          await Future.delayed(_reconnectDelay);
+        }
+      }
     }
   }
 
@@ -1279,6 +1301,13 @@ class RolandService with
   Future<void> _sendCommand(String command, {int retryCount = 3}) async {
     // Queues the command, sends it via socket, and waits for ACK using a Completer
     if (!_isConnected) throw ConnectionException('Not connected');
+    // Rate limiting
+    final now = DateTime.now();
+    final elapsed = now.difference(_lastCommandTime);
+    if (elapsed < _minCommandInterval) {
+      await Future.delayed(_minCommandInterval - elapsed);
+    }
+    _lastCommandTime = DateTime.now();
     // Wait if too many pending
     while (_pendingCount >= maxConcurrentCommands) {
       await Future.delayed(const Duration(milliseconds: 10));
@@ -1365,7 +1394,7 @@ class RolandService with
       if (_ackCompleters.isNotEmpty) {
         _ackCompleters.removeFirst().completeError(CommandException('Command failed: $response'));
       }
-    } else if (_autoTransmitPrefixes.any((prefix) => response.startsWith(prefix + ':'))) {
+    } else if (_autoTransmitPrefixes.any((prefix) => response.startsWith('$prefix:'))) {
       // Handle auto-transmit responses
       final parsed = _parseResponse(response);
       if (parsed != null) {
@@ -1387,13 +1416,21 @@ class RolandService with
     final params = paramStr.split(',');
     switch (cmd) {
       case 'VFL':
-        return FaderLevelResponse(int.parse(params[0]));
+        try {
+          return FaderLevelResponse(int.parse(params[0]));
+        } catch (e) {
+          throw RolandException('Invalid VFL response: $response');
+        }
       case 'PGM':
         return ProgramResponse(params[0], params.length > 1 ? params[1] : null);
       case 'PST':
         return PreviewResponse(params[0], params.length > 1 ? params[1] : null);
       case 'PIP':
-        return PinPPositionResponse(int.parse(params[1]), int.parse(params[2]));
+        try {
+          return PinPPositionResponse(int.parse(params[1]), int.parse(params[2]));
+        } catch (e) {
+          throw RolandException('Invalid PIP response: $response');
+        }
       case 'VER':
         return VersionResponse(params[0], params[1]);
       case 'CAMPTS':
@@ -1419,7 +1456,11 @@ class RolandService with
       case 'AUXLV':
         return MeterResponse(params);
       case 'TLY':
-        return TallyResponse(params.map(int.parse).toList());
+        try {
+          return TallyResponse(params.map(int.parse).toList());
+        } catch (e) {
+          throw RolandException('Invalid TLY response: $response');
+        }
       case 'MEM':
         return MemoryResponse(params[0]);
       case 'DSS':
@@ -1615,5 +1656,11 @@ class RolandService with
       case 'HCP':
         return HdcpResponse(params[0]);
     }
+  }
+
+  /// Disposes the service, closing streams and disconnecting.
+  void dispose() {
+    disconnect();
+    _responseController.close();
   }
 }
