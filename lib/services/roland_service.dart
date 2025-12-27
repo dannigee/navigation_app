@@ -26,6 +26,14 @@ class ValidationException extends RolandException {
   ValidationException(String message) : super(message);
 }
 
+class InvalidParameterException extends RolandException {
+  InvalidParameterException(String message) : super(message);
+}
+
+class ParsingException extends RolandException {
+  ParsingException(String message) : super(message);
+}
+
 /// Enums for camera directions.
 enum PanDirection { left, stop, right }
 enum TiltDirection { down, stop, up }
@@ -40,8 +48,8 @@ const String nackString = 'NACK';
 
 /// Response models for parsed responses.
 class FaderLevelResponse {
+  const FaderLevelResponse(this.level);
   final int level;
-  FaderLevelResponse(this.level);
 }
 
 class ProgramResponse {
@@ -149,9 +157,9 @@ class TestPatternResponse {
 
 class TestToneResponse {
   final String level;
-  final String freqL;
-  final String freqR;
-  TestToneResponse(this.level, this.freqL, this.freqR);
+  final String? freqL;
+  final String? freqR;
+  TestToneResponse(this.level, [this.freqL, this.freqR]);
 }
 
 class BusyResponse {
@@ -451,7 +459,12 @@ mixin VideoCommands {
   }
 
   /// Gets video input status.
-  Future<void> getVideoInputStatus(String input) => _sendCommand(_buildCommand('QVIST', [input]));
+  Future<void> getVideoInputStatus(String input) {
+    const validInputs = {'HDMI1', 'HDMI2', 'HDMI3', 'HDMI4', 'HDMI5', 'HDMI6', 'HDMI7', 'HDMI8',
+      'SDI1', 'SDI2', 'SDI3', 'SDI4', 'SDI5', 'SDI6', 'SDI7', 'SDI8'};
+    if (!validInputs.contains(input)) throw ArgumentError('Invalid input: $input. Must be HDMI1-8 or SDI1-8');
+    return _sendCommand(_buildCommand('QVIST', [input]));
+  }
 
   /// Sets the transition type.
   Future<void> setTransitionType(String type) {
@@ -809,20 +822,27 @@ mixin ControlCommands {
   }
 
   /// Recalls scene memory.
-  Future<void> recallMemory(String memory) => _sendCommand(_buildCommand('MEM', [memory]));
+  Future<void> recallMemory(String memory) {
+    if (!RegExp(r'^MEMORY(30|[1-2][0-9]|[1-9])$').hasMatch(memory)) throw ArgumentError('Invalid memory: $memory');
+    return _sendCommand(_buildCommand('MEM', [memory]));
+  }
 
   /// Gets selected scene memory.
   Future<void> getMemory() => _sendCommand(_buildCommand('QMEM'));
 
   /// Outputs GPO.
   Future<void> outputGpo(String gpo, {bool? state}) {
+    if (!RegExp(r'^GPO(1[0-6]|[1-9])$').hasMatch(gpo)) throw ArgumentError('Invalid gpo: $gpo');
     List<String> params = [gpo];
     if (state != null) params.add(state ? 'ON' : 'OFF');
     return _sendCommand(_buildCommand('GPO', params));
   }
 
   /// Gets GPO status.
-  Future<void> getGpo(String gpo) => _sendCommand(_buildCommand('QGPO', [gpo]));
+  Future<void> getGpo(String gpo) {
+    if (!RegExp(r'^GPO(1[0-6]|[1-9])$').hasMatch(gpo)) throw ArgumentError('Invalid gpo: $gpo');
+    return _sendCommand(_buildCommand('QGPO', [gpo]));
+  }
 
   /// Gets tally status.
   Future<void> getTally() => _sendCommand(_buildCommand('TLY'));
@@ -837,16 +857,34 @@ mixin ControlCommands {
   Future<void> getAutoSwitching() => _sendCommand(_buildCommand('QASW'));
 
   /// Executes input scan.
-  Future<void> executeInputScan(String type) => _sendCommand(_buildCommand('INSC', [type]));
+  Future<void> executeInputScan(String type) {
+    const validTypes = {'NORMAL', 'REVERSE', 'RANDOM'};
+    if (!validTypes.contains(type.toUpperCase())) throw ArgumentError('Invalid type: $type');
+    return _sendCommand(_buildCommand('INSC', [type]));
+  }
 
   /// Executes scene memory scan.
-  Future<void> executeMemoryScan(String type) => _sendCommand(_buildCommand('MEMSC', [type]));
+  Future<void> executeMemoryScan(String type) {
+    const validTypes = {'NORMAL', 'REVERSE', 'RANDOM'};
+    if (!validTypes.contains(type.toUpperCase())) throw ArgumentError('Invalid type: $type');
+    return _sendCommand(_buildCommand('MEMSC', [type]));
+  }
 
   /// Executes PinP source scan.
-  Future<void> executePinPScan(String pinp, String type) => _sendCommand(_buildCommand('PPSC', [pinp, type]));
+  Future<void> executePinPScan(String pinp, String type) {
+    if (!RegExp(r'^PinP[1-4]$').hasMatch(pinp)) throw ArgumentError('Invalid pinp: $pinp');
+    const validTypes = {'NORMAL', 'REVERSE', 'RANDOM'};
+    if (!validTypes.contains(type.toUpperCase())) throw ArgumentError('Invalid type: $type');
+    return _sendCommand(_buildCommand('PPSC', [pinp, type]));
+  }
 
   /// Executes DSK source scan.
-  Future<void> executeDskScan(String dsk, String type) => _sendCommand(_buildCommand('DSKSC', [dsk, type]));
+  Future<void> executeDskScan(String dsk, String type) {
+    if (!RegExp(r'^DSK[1-2]$').hasMatch(dsk)) throw ArgumentError('Invalid dsk: $dsk');
+    const validTypes = {'NORMAL', 'REVERSE', 'RANDOM'};
+    if (!validTypes.contains(type.toUpperCase())) throw ArgumentError('Invalid type: $type');
+    return _sendCommand(_buildCommand('DSKSC', [dsk, type]));
+  }
 }
 
 mixin SystemCommands {
@@ -858,6 +896,9 @@ mixin SystemCommands {
 
   /// Gets model and version.
   Future<void> getVersion() => _sendCommand(_buildCommand('VER'));
+
+  /// Gets model and version (alias for QVER if needed, but uses VER as per docs).
+  Future<void> getVersionQuery() => getVersion();
 
   /// Gets busy status.
   Future<void> getBusyStatus() => _sendCommand(_buildCommand('QBSY'));
@@ -912,12 +953,16 @@ mixin CameraCommands {
 
   /// Sets pan/tilt speed.
   Future<void> setPanTiltSpeed(String camera, int speed) {
+    if (!RolandService.cameraRegex.hasMatch(camera)) throw ArgumentError('Invalid camera: $camera');
     if (speed < 1 || speed > 24) throw ArgumentError('speed must be 1-24');
     return _sendCommand(_buildCommand('CAMPTS', [camera, speed.toString()]));
   }
 
   /// Gets pan/tilt speed.
-  Future<void> getPanTiltSpeed(String camera) => _sendCommand(_buildCommand('QCAMPTS', [camera]));
+  Future<void> getPanTiltSpeed(String camera) {
+    if (!RolandService.cameraRegex.hasMatch(camera)) throw ArgumentError('Invalid camera: $camera');
+    return _sendCommand(_buildCommand('QCAMPTS', [camera]));
+  }
 
   /// Sets zoom.
   Future<void> setZoom(String camera, String direction) {
@@ -928,22 +973,42 @@ mixin CameraCommands {
   }
 
   /// Resets zoom.
-  Future<void> resetZoom(String camera) => _sendCommand(_buildCommand('CAMZMR', [camera]));
+  Future<void> resetZoom(String camera) {
+    if (!RolandService.cameraRegex.hasMatch(camera)) throw ArgumentError('Invalid camera: $camera');
+    return _sendCommand(_buildCommand('CAMZMR', [camera]));
+  }
 
   /// Sets focus.
-  Future<void> setFocus(String camera, String direction) => _sendCommand(_buildCommand('CAMFC', [camera, direction]));
+  Future<void> setFocus(String camera, String direction) {
+    if (!RolandService.cameraRegex.hasMatch(camera)) throw ArgumentError('Invalid camera: $camera');
+    const validDirections = {'NEAR', 'STOP', 'FAR'};
+    if (!validDirections.contains(direction.toUpperCase())) throw ArgumentError('Invalid direction: $direction');
+    return _sendCommand(_buildCommand('CAMFC', [camera, direction]));
+  }
 
   /// Sets auto focus.
-  Future<void> setAutoFocus(String camera, bool on) => _sendCommand(_buildCommand('CAMAFC', [camera, on ? 'ON' : 'OFF']));
+  Future<void> setAutoFocus(String camera, bool on) {
+    if (!RolandService.cameraRegex.hasMatch(camera)) throw ArgumentError('Invalid camera: $camera');
+    return _sendCommand(_buildCommand('CAMAFC', [camera, on ? 'ON' : 'OFF']));
+  }
 
   /// Gets auto focus status.
-  Future<void> getAutoFocus(String camera) => _sendCommand(_buildCommand('QCAMAFC', [camera]));
+  Future<void> getAutoFocus(String camera) {
+    if (!RolandService.cameraRegex.hasMatch(camera)) throw ArgumentError('Invalid camera: $camera');
+    return _sendCommand(_buildCommand('QCAMAFC', [camera]));
+  }
 
   /// Sets auto exposure.
-  Future<void> setAutoExposure(String camera, bool on) => _sendCommand(_buildCommand('CAMAEP', [camera, on ? 'ON' : 'OFF']));
+  Future<void> setAutoExposure(String camera, bool on) {
+    if (!RolandService.cameraRegex.hasMatch(camera)) throw ArgumentError('Invalid camera: $camera');
+    return _sendCommand(_buildCommand('CAMAEP', [camera, on ? 'ON' : 'OFF']));
+  }
 
   /// Gets auto exposure status.
-  Future<void> getAutoExposure(String camera) => _sendCommand(_buildCommand('QCAMAEP', [camera]));
+  Future<void> getAutoExposure(String camera) {
+    if (!RolandService.cameraRegex.hasMatch(camera)) throw ArgumentError('Invalid camera: $camera');
+    return _sendCommand(_buildCommand('QCAMAEP', [camera]));
+  }
 
   /// Recalls preset.
   Future<void> recallPreset(String camera, String preset) {
@@ -953,7 +1018,10 @@ mixin CameraCommands {
   }
 
   /// Gets current preset.
-  Future<void> getCurrentPreset(String camera) => _sendCommand(_buildCommand('QCAMPR', [camera]));
+  Future<void> getCurrentPreset(String camera) {
+    if (!RolandService.cameraRegex.hasMatch(camera)) throw ArgumentError('Invalid camera: $camera');
+    return _sendCommand(_buildCommand('QCAMPR', [camera]));
+  }
 }
 
 mixin SplitCommands {
@@ -1355,7 +1423,7 @@ class RolandService with
 
   void _handleResponse(String data) {
     // Accumulates incoming data into buffer, checks for overflow, processes complete responses (ended by \n), parses and emits via stream
-    _responseBuffer.write(data);
+    _responseBuffer.write(data.replaceAll('\r', ''));
     if (_responseBuffer.length > maxBufferSize) {
       _responseBuffer.clear();
       _responseController.addError(RolandException('Response buffer overflow'));
@@ -1366,11 +1434,22 @@ class RolandService with
     while ((endIndex = buffer.indexOf('\n')) != -1) {
       String response = buffer.substring(0, endIndex).trim();
       buffer = buffer.substring(endIndex + 1);
-      try {
-        _processCompleteResponse(response);
-      } catch (e) {
-        dev.log('Error processing response: $e');
-        _responseController.addError(RolandException('Response parsing error: $e'));
+      int retryCount = 0;
+      const int maxRetries = 3;
+      bool parsed = false;
+      while (retryCount < maxRetries && !parsed) {
+        try {
+          _processCompleteResponse(response);
+          parsed = true;
+        } catch (e) {
+          retryCount++;
+          if (retryCount >= maxRetries) {
+            dev.log('Failed to parse response after $maxRetries attempts: $response');
+            _responseController.addError(e);
+          } else {
+            dev.log('Retrying parsing for response: $response, attempt $retryCount');
+          }
+        }
       }
     }
     _responseBuffer.clear();
@@ -1379,7 +1458,11 @@ class RolandService with
 
   void _processCompleteResponse(String response) {
     dev.log('Received response: $response');
-    if (response.endsWith(';ACK;') || response == 'ACK;') {
+    // Check for ACK completion: either explicit ACK, or query responses without ACK
+    bool shouldCompleteAck = response.endsWith(';ACK;') || response == 'ACK;' ||
+        (response.contains(':') && !response.contains('NACK') && !response.contains('ERROR') &&
+         !_autoTransmitPrefixes.any((prefix) => response.startsWith('$prefix:')));
+    if (shouldCompleteAck) {
       // Complete the next pending ACK
       if (_ackCompleters.isNotEmpty) {
         _ackCompleters.removeFirst().complete();
@@ -1389,16 +1472,16 @@ class RolandService with
       if (parsed != null) {
         _responseController.add(parsed);
       }
+    } else if (_autoTransmitPrefixes.any((prefix) => response.startsWith('$prefix:'))) {
+      // Handle auto-transmit responses (no ACK completion)
+      final parsed = _parseResponse(response);
+      if (parsed != null) {
+        _responseController.add(parsed);
+      }
     } else if (response.contains('NACK') || response.contains('ERROR')) {
       // Handle errors
       if (_ackCompleters.isNotEmpty) {
         _ackCompleters.removeFirst().completeError(CommandException('Command failed: $response'));
-      }
-    } else if (_autoTransmitPrefixes.any((prefix) => response.startsWith('$prefix:'))) {
-      // Handle auto-transmit responses
-      final parsed = _parseResponse(response);
-      if (parsed != null) {
-        _responseController.add(parsed);
       }
     } else {
       // Raw response for unparsed
@@ -1406,20 +1489,13 @@ class RolandService with
     }
   }
 
-  dynamic _parseResponse(String response) {
-    // Remove ;ACK;
-    final clean = response.replaceAll(';ACK;', '').replaceAll('ACK;', '');
-    final parts = clean.split(':');
-    if (parts.length < 2) return null;
-    final cmd = parts[0];
-    final paramStr = parts[1];
-    final params = paramStr.split(',');
+  dynamic _parseVideoResponse(String cmd, List<String> params, String response) {
     switch (cmd) {
       case 'VFL':
         try {
           return FaderLevelResponse(int.parse(params[0]));
         } catch (e) {
-          throw RolandException('Invalid VFL response: $response');
+          throw InvalidParameterException('Invalid VFL response: $response');
         }
       case 'PGM':
         return ProgramResponse(params[0], params.length > 1 ? params[1] : null);
@@ -1429,64 +1505,14 @@ class RolandService with
         try {
           return PinPPositionResponse(int.parse(params[1]), int.parse(params[2]));
         } catch (e) {
-          throw RolandException('Invalid PIP response: $response');
+          throw InvalidParameterException('Invalid PIP response: $response');
         }
-      case 'VER':
-        return VersionResponse(params[0], params[1]);
-      case 'CAMPTS':
-        return PanTiltSpeedResponse(params[0], int.parse(params[1]));
-      case 'CAMPR':
-        return PresetResponse(params[0], params[1]);
-      case 'IAL':
-        return AudioLevelResponse(params[0], params[1]);
-      case 'QIAL':
-        return AudioLevelResponse(params[0], params[1]);
-      case 'OAL':
-        return AudioLevelResponse(params[0], params[1]);
-      case 'QOAL':
-        return AudioLevelResponse(params[0], params[1]);
-      case 'MTRLV':
-        return MeterResponse(params);
-      case 'GRLV':
-        return MeterResponse(params);
-      case 'AMLV':
-        return MeterResponse(params);
-      case 'SPLV':
-        return MeterResponse(params);
-      case 'AUXLV':
-        return MeterResponse(params);
-      case 'TLY':
-        try {
-          return TallyResponse(params.map(int.parse).toList());
-        } catch (e) {
-          throw RolandException('Invalid TLY response: $response');
-        }
-      case 'MEM':
-        return MemoryResponse(params[0]);
-      case 'DSS':
-        return DskSourceResponse(params[0], params[1], params.length > 2 ? params[2] : null);
-      case 'KYL':
-        return DskLevelResponse(int.parse(params[1]));
-      case 'QKYL':
-        return DskLevelResponse(int.parse(params[1]));
-      case 'KYG':
-        return DskLevelResponse(int.parse(params[1]));
-      case 'QKYG':
-        return DskLevelResponse(int.parse(params[1]));
-      case 'AUX':
-        return AuxResponse(params[0], params[1], params.length > 2 ? params[2] : null);
-      case 'ATG':
-        return TransitionStatusResponse(params[0]);
-      case 'FRZ':
-        return FreezeResponse(params[0]);
-      case 'QFRZ':
-        return FreezeResponse(params[0]);
-      case 'FTB':
-        return FadeResponse(params[0]);
-      case 'QFTB':
-        return FadeResponse(params[0]);
       case 'VISRC':
-        return VideoInputSourceResponse(int.parse(params[0]), params[1]);
+        try {
+          return VideoInputSourceResponse(int.parse(params[0]), params[1]);
+        } catch (e) {
+          throw InvalidParameterException('Invalid VISRC response: $response');
+        }
       case 'VIST':
         return VideoInputStatusResponse(params[0], params[1]);
       case 'VIS':
@@ -1502,9 +1528,29 @@ class RolandService with
       case 'QTRS':
         return TransitionTypeResponse(params[0]);
       case 'TIM':
-        return TransitionTimeResponse(params[0], int.parse(params[1]));
+        try {
+          return TransitionTimeResponse(params[0], int.parse(params[1]));
+        } catch (e) {
+          throw InvalidParameterException('Invalid TIM response: $response');
+        }
       case 'QTIM':
-        return TransitionTimeResponse(params[0], int.parse(params[1]));
+        try {
+          return TransitionTimeResponse(params[0], int.parse(params[1]));
+        } catch (e) {
+          throw InvalidParameterException('Invalid QTIM response: $response');
+        }
+      case 'ATG':
+        return TransitionStatusResponse(params[0]);
+      case 'QATG':
+        return TransitionStatusResponse(params[0]);
+      case 'FRZ':
+        return FreezeResponse(params[0]);
+      case 'QFRZ':
+        return FreezeResponse(params[0]);
+      case 'FTB':
+        return FadeResponse(params[0]);
+      case 'QFTB':
+        return FadeResponse(params[0]);
       case 'PIS':
         return PinPSourceResponse(params[0], params[1]);
       case 'QPIS':
@@ -1525,48 +1571,78 @@ class RolandService with
         return DskPreviewResponse(params[0], params[1]);
       case 'QDVW':
         return DskPreviewResponse(params[0], params[1]);
+      case 'DSS':
+        return DskSourceResponse(params[0], params[1], params.length > 2 ? params[2] : null);
       case 'QDSS':
         return DskSourceResponse(params[0], params[1], params.length > 2 ? params[2] : null);
+      case 'KYL':
+        try {
+          return DskLevelResponse(int.parse(params[1]));
+        } catch (e) {
+          throw InvalidParameterException('Invalid KYL response: $response');
+        }
+      case 'QKYL':
+        try {
+          return DskLevelResponse(int.parse(params[1]));
+        } catch (e) {
+          throw InvalidParameterException('Invalid QKYL response: $response');
+        }
+      case 'KYG':
+        try {
+          return DskLevelResponse(int.parse(params[1]));
+        } catch (e) {
+          throw InvalidParameterException('Invalid KYG response: $response');
+        }
+      case 'QKYG':
+        try {
+          return DskLevelResponse(int.parse(params[1]));
+        } catch (e) {
+          throw InvalidParameterException('Invalid QKYG response: $response');
+        }
+      case 'AUX':
+        return AuxResponse(params[0], params[1], params.length > 2 ? params[2] : null);
+      case 'QAUX':
+        return AuxResponse(params[0], params[1], params.length > 2 ? params[2] : null);
       case 'SPS':
         return SplitStatusResponse(params[0], params[1]);
       case 'QSPS':
         return SplitStatusResponse(params[0], params[1]);
       case 'SPT':
-        return SplitPositionsResponse(params[0], int.parse(params[1]), int.parse(params[2]), params.length > 3 ? int.parse(params[3]) : null);
+        try {
+          return SplitPositionsResponse(params[0], int.parse(params[1]), int.parse(params[2]), params.length > 3 ? int.parse(params[3]) : null);
+        } catch (e) {
+          throw InvalidParameterException('Invalid SPT response: $response');
+        }
       case 'QSPT':
-        return SplitPositionsResponse(params[0], int.parse(params[1]), int.parse(params[2]), params.length > 3 ? int.parse(params[3]) : null);
+        try {
+          return SplitPositionsResponse(params[0], int.parse(params[1]), int.parse(params[2]), params.length > 3 ? int.parse(params[3]) : null);
+        } catch (e) {
+          throw InvalidParameterException('Invalid QSPT response: $response');
+        }
       case 'STO':
         return StillResponse(params[0]);
       case 'QSTO':
         return StillResponse(params[0]);
-      case 'HDCP':
+      case 'HCP':
         return HdcpResponse(params[0]);
-      case 'QHDCP':
-        return HdcpResponse(params[0]);
-      case 'TPT':
-        return TestPatternResponse(params[0]);
-      case 'QTPT':
-        return TestPatternResponse(params[0]);
-      case 'TTN':
-        return TestToneResponse(params[0], params.length > 1 ? params[1] : '500', params.length > 2 ? params[2] : '500');
-      case 'QTTN':
-        return TestToneResponse(params[0], params.length > 1 ? params[1] : '500', params.length > 2 ? params[2] : '500');
-      case 'BSY':
-        return BusyResponse(params[0]);
-      case 'QBSY':
-        return BusyResponse(params[0]);
-      case 'MCRST':
-        return MacroStatusResponse(params[0], params[1]);
-      case 'QMCRST':
-        return MacroStatusResponse(params[0], params[1]);
-      case 'SQS':
-        return SequencerStatusResponse(params[0]);
-      case 'SQA':
-        return AutoSequenceResponse(params[0]);
+    }
+    return null;
+  }
+
+  dynamic _parseAudioResponse(String cmd, List<String> params, String response) {
+    switch (cmd) {
       case 'AOS':
         return AudioOutputAssignResponse(params[0], params[1]);
       case 'QAOS':
         return AudioOutputAssignResponse(params[0], params[1]);
+      case 'IAL':
+        return AudioLevelResponse(params[0], params[1]);
+      case 'QIAL':
+        return AudioLevelResponse(params[0], params[1]);
+      case 'OAL':
+        return AudioLevelResponse(params[0], params[1]);
+      case 'QOAL':
+        return AudioLevelResponse(params[0], params[1]);
       case 'IAM':
         return AudioMuteResponse(params[0], params[1]);
       case 'QIAM':
@@ -1576,9 +1652,17 @@ class RolandService with
       case 'QIAS':
         return AudioSoloResponse(params[0], params[1]);
       case 'ADT':
-        return AudioDelayResponse(params[0], int.parse(params[1]));
+        try {
+          return AudioDelayResponse(params[0], int.parse(params[1]));
+        } catch (e) {
+          throw InvalidParameterException('Invalid ADT response: $response');
+        }
       case 'QADT':
-        return AudioDelayResponse(params[0], int.parse(params[1]));
+        try {
+          return AudioDelayResponse(params[0], int.parse(params[1]));
+        } catch (e) {
+          throw InvalidParameterException('Invalid QADT response: $response');
+        }
       case 'HPF':
         return AudioFilterResponse(params[0], params[1]);
       case 'QHPF':
@@ -1607,55 +1691,204 @@ class RolandService with
         return AutoMixingResponse(params[0]);
       case 'QATM':
         return AutoMixingResponse(params[0]);
+    }
+    return null;
+  }
+
+  dynamic _parseMeterResponse(String cmd, List<String> params, String response) {
+    switch (cmd) {
+      case 'MTRLV':
+        return MeterResponse(params);
+      case 'GRLV':
+        return MeterResponse(params);
+      case 'AMLV':
+        return MeterResponse(params);
+      case 'SPLV':
+        return MeterResponse(params);
+      case 'AUXLV':
+        return MeterResponse(params);
+      case 'MTRCH':
+        try {
+          return MeterChannelResponse(int.parse(params[0]), params[1]);
+        } catch (e) {
+          throw InvalidParameterException('Invalid MTRCH response: $response');
+        }
+      case 'GRCH':
+        try {
+          return MeterChannelResponse(int.parse(params[0]), params[1]);
+        } catch (e) {
+          throw InvalidParameterException('Invalid GRCH response: $response');
+        }
+      case 'AMCH':
+        try {
+          return MeterChannelResponse(int.parse(params[0]), params[1]);
+        } catch (e) {
+          throw InvalidParameterException('Invalid AMCH response: $response');
+        }
+      case 'SPCH':
+        try {
+          return MeterChannelResponse(int.parse(params[0]), params[1]);
+        } catch (e) {
+          throw InvalidParameterException('Invalid SPCH response: $response');
+        }
+      case 'AUXCH':
+        try {
+          return MeterChannelResponse(int.parse(params[0]), params[1]);
+        } catch (e) {
+          throw InvalidParameterException('Invalid AUXCH response: $response');
+        }
       case 'MTRSW':
         return MeterAutoTransmitResponse(params[0]);
       case 'QMTRSW':
         return MeterAutoTransmitResponse(params[0]);
-      case 'MTRCH':
-        return MeterChannelResponse(int.parse(params[0]), params[1]);
       case 'GRSW':
         return CompGrAutoTransmitResponse(params[0]);
       case 'QGRSW':
         return CompGrAutoTransmitResponse(params[0]);
-      case 'GRCH':
-        return MeterChannelResponse(int.parse(params[0]), params[1]);
       case 'AMSW':
         return AutoMixingAutoTransmitResponse(params[0]);
       case 'QAMSW':
         return AutoMixingAutoTransmitResponse(params[0]);
-      case 'AMCH':
-        return MeterChannelResponse(int.parse(params[0]), params[1]);
       case 'SPSW':
         return SigPeakAutoTransmitResponse(params[0]);
       case 'QSPSW':
         return SigPeakAutoTransmitResponse(params[0]);
-      case 'SPCH':
-        return MeterChannelResponse(int.parse(params[0]), params[1]);
       case 'AUXSW':
         return AuxAutoTransmitResponse(params[0]);
       case 'QAUXSW':
         return AuxAutoTransmitResponse(params[0]);
-      case 'AUXCH':
-        return MeterChannelResponse(int.parse(params[0]), params[1]);
+    }
+    return null;
+  }
+
+  dynamic _parseControlResponse(String cmd, List<String> params, String response) {
+    switch (cmd) {
+      case 'MEM':
+        return MemoryResponse(params[0]);
+      case 'QMEM':
+        return MemoryResponse(params[0]);
       case 'GPO':
         return GpoResponse(params[0], params[1]);
       case 'QGPO':
         return GpoResponse(params[0], params[1]);
+      case 'TLY':
+        try {
+          return TallyResponse(params.map(int.parse).toList());
+        } catch (e) {
+          throw InvalidParameterException('Invalid TLY response: $response');
+        }
       case 'ASW':
         return AutoSwitchingResponse(params[0]);
       case 'QASW':
         return AutoSwitchingResponse(params[0]);
+    }
+    return null;
+  }
+
+  dynamic _parseSystemResponse(String cmd, List<String> params, String response) {
+    switch (cmd) {
+      case 'VER':
+        if (params.length != 2) throw ParsingException('Invalid VER response: $response');
+        return VersionResponse(params[0], params[1]);
+      case 'BSY':
+        return BusyResponse(params[0]);
+      case 'QBSY':
+        return BusyResponse(params[0]);
+      case 'HDCP':
+        return HdcpResponse(params[0]);
+      case 'QHDCP':
+        return HdcpResponse(params[0]);
+      case 'TPT':
+        return TestPatternResponse(params[0]);
+      case 'QTPT':
+        return TestPatternResponse(params[0]);
+      case 'TTN':
+        if (params.isEmpty) throw ParsingException('Invalid TTN response: $response');
+        return TestToneResponse(params[0], params.length > 1 ? params[1] : null, params.length > 2 ? params[2] : null);
+      case 'QTTN':
+        if (params.isEmpty) throw ParsingException('Invalid QTTN response: $response');
+        return TestToneResponse(params[0], params.length > 1 ? params[1] : null, params.length > 2 ? params[2] : null);
+    }
+    return null;
+  }
+
+  dynamic _parseCameraResponse(String cmd, List<String> params, String response) {
+    switch (cmd) {
+      case 'CAMPTS':
+        if (params.length != 2) throw ParsingException('Invalid CAMPTS response: $response');
+        try {
+          return PanTiltSpeedResponse(params[0], int.parse(params[1]));
+        } catch (e) {
+          throw InvalidParameterException('Invalid CAMPTS response: $response');
+        }
+      case 'QCAMPTS':
+        if (params.length != 2) throw ParsingException('Invalid QCAMPTS response: $response');
+        try {
+          return PanTiltSpeedResponse(params[0], int.parse(params[1]));
+        } catch (e) {
+          throw InvalidParameterException('Invalid QCAMPTS response: $response');
+        }
+      case 'CAMPR':
+        if (params.length != 2) throw ParsingException('Invalid CAMPR response: $response');
+        return PresetResponse(params[0], params[1]);
+      case 'QCAMPR':
+        if (params.length != 2) throw ParsingException('Invalid QCAMPR response: $response');
+        return PresetResponse(params[0], params[1]);
       case 'CAFC':
+        return AutoFocusResponse(params[0], params[1]);
+      case 'QCAMAFC':
         return AutoFocusResponse(params[0], params[1]);
       case 'CAEP':
         return AutoExposureResponse(params[0], params[1]);
+      case 'QCAMAEP':
+        return AutoExposureResponse(params[0], params[1]);
       case 'CPTS':
-        return PanTiltSpeedResponse(params[0], int.parse(params[1]));
+        try {
+          return PanTiltSpeedResponse(params[0], int.parse(params[1]));
+        } catch (e) {
+          throw InvalidParameterException('Invalid CPTS response: $response');
+        }
       case 'CPR':
         return PresetResponse(params[0], params[1]);
-      case 'HCP':
-        return HdcpResponse(params[0]);
     }
+    return null;
+  }
+
+  dynamic _parseMacroResponse(String cmd, List<String> params, String response) {
+    switch (cmd) {
+      case 'MCRST':
+        return MacroStatusResponse(params[0], params[1]);
+      case 'QMCRST':
+        return MacroStatusResponse(params[0], params[1]);
+      case 'SQS':
+        return SequencerStatusResponse(params[0]);
+      case 'QSEQSW':
+        return SequencerStatusResponse(params[0]);
+      case 'SQA':
+        return AutoSequenceResponse(params[0]);
+      case 'QSEQAS':
+        return AutoSequenceResponse(params[0]);
+    }
+    return null;
+  }
+
+  dynamic _parseResponse(String response) {
+    // Remove ;ACK;
+    final clean = response.replaceAll(';ACK;', '').replaceAll('ACK;', '');
+    final parts = clean.split(':');
+    if (parts.length < 2) return null;
+    final cmd = parts[0];
+    final paramStr = parts[1];
+    final params = paramStr.split(',');
+    dynamic result;
+    if ((result = _parseVideoResponse(cmd, params, response)) != null) return result;
+    if ((result = _parseAudioResponse(cmd, params, response)) != null) return result;
+    if ((result = _parseMeterResponse(cmd, params, response)) != null) return result;
+    if ((result = _parseControlResponse(cmd, params, response)) != null) return result;
+    if ((result = _parseSystemResponse(cmd, params, response)) != null) return result;
+    if ((result = _parseCameraResponse(cmd, params, response)) != null) return result;
+    if ((result = _parseMacroResponse(cmd, params, response)) != null) return result;
+    return null;
   }
 
   /// Disposes the service, closing streams and disconnecting.

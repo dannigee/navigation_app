@@ -103,7 +103,7 @@ void main() {
     });
 
     test('parseResponse throws on invalid int', () {
-      expect(() => service.parseResponseForTest('VFL:abc;ACK;'), throwsA(isA<RolandException>()));
+      expect(() => service.parseResponseForTest('VFL:abc;ACK;'), throwsA(isA<InvalidParameterException>()));
     });
   });
 }
