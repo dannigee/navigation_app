@@ -1025,7 +1025,7 @@ mixin CameraCommands {
   /// Recalls preset.
   Future<void> recallPreset(String camera, String preset) {
     if (!RolandService.cameraRegex.hasMatch(camera)) throw ArgumentError('Invalid camera: $camera');
-    if (!RegExp(r'^PRESET(10|[1-9])$').hasMatch(preset)) throw ArgumentError('Invalid preset: $preset');
+    if (!RegExp(r'^PRESET(\d+)$').hasMatch(preset)) throw ArgumentError('Invalid preset: $preset'); /// 10|[1-9]
     return _sendCommand(_buildCommand('CAMPR', [camera, preset]));
   }
 
