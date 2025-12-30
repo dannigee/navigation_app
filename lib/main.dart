@@ -29,10 +29,21 @@ class RolandControlPage extends StatefulWidget {
 }
 
 class _RolandControlPageState extends State<RolandControlPage> {
-  final TextEditingController _ipController = TextEditingController(text: '192.168.1.10');
+  final TextEditingController _ipController = TextEditingController(text: '10.0.1.20');
   RolandService? _rolandService;
   bool _isConnected = false;
+  bool _isConnecting = false;
   String _lastResponse = '';
+  String _connectionError = '';
+
+  @override
+  void initState() {
+    super.initState();
+    // Auto-connect on app start
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _connect();
+    });
+  }
 
   // PinP state
   int _selectedPinP = 1;
@@ -81,15 +92,20 @@ class _RolandControlPageState extends State<RolandControlPage> {
   void _getPanTiltSpeed() => _rolandService?.getPanTiltSpeed('CAMERA${_selectedCamera + 1}');
 
   Future<void> _connect() async {
-    final context = this.context;
     if (_isConnected) {
       _rolandService?.disconnect();
       setState(() {
         _isConnected = false;
         _rolandService = null;
+        _connectionError = '';
       });
       return;
     }
+
+    setState(() {
+      _isConnecting = true;
+      _connectionError = '';
+    });
 
     final service = RolandService(host: _ipController.text);
     try {
@@ -97,19 +113,20 @@ class _RolandControlPageState extends State<RolandControlPage> {
       setState(() {
         _rolandService = service;
         _isConnected = true;
+        _isConnecting = false;
+        _connectionError = '';
       });
-      
+
       service.responseStream.listen((data) {
         setState(() {
-          _lastResponse = data;
+          _lastResponse = data.toString();
         });
       });
-      
+
     } catch (e) {
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Connection failed: $e')),
-        );
+      setState(() {
+        _isConnecting = false;
+        _connectionError = e.toString();
       });
     }
   }
@@ -127,26 +144,63 @@ class _RolandControlPageState extends State<RolandControlPage> {
           children: [
             Padding(
               padding: const EdgeInsets.all(16.0),
-              child: Row(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  Expanded(
-                    child: TextField(
-                      controller: _ipController,
-                      decoration: const InputDecoration(
-                        labelText: 'IP Address',
-                        border: OutlineInputBorder(),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: TextField(
+                          controller: _ipController,
+                          decoration: const InputDecoration(
+                            labelText: 'IP Address',
+                            border: OutlineInputBorder(),
+                          ),
+                          enabled: !_isConnected && !_isConnecting,
+                        ),
                       ),
-                      enabled: !_isConnected,
-                    ),
+                      const SizedBox(width: 16),
+                      FilledButton(
+                        onPressed: _isConnecting ? null : _connect,
+                        style: FilledButton.styleFrom(
+                          backgroundColor: _isConnected ? Colors.red : null,
+                        ),
+                        child: _isConnecting
+                            ? const SizedBox(
+                                width: 20,
+                                height: 20,
+                                child: CircularProgressIndicator(
+                                  strokeWidth: 2,
+                                  color: Colors.white,
+                                ),
+                              )
+                            : Text(_isConnected ? 'Disconnect' : 'Connect'),
+                      ),
+                    ],
                   ),
-                  const SizedBox(width: 16),
-                  FilledButton(
-                    onPressed: _connect,
-                    style: FilledButton.styleFrom(
-                      backgroundColor: _isConnected ? Colors.red : null,
+                  if (_connectionError.isNotEmpty) ...[
+                    const SizedBox(height: 8),
+                    Container(
+                      padding: const EdgeInsets.all(12),
+                      decoration: BoxDecoration(
+                        color: Colors.red.shade50,
+                        borderRadius: BorderRadius.circular(8),
+                        border: Border.all(color: Colors.red.shade200),
+                      ),
+                      child: Row(
+                        children: [
+                          Icon(Icons.error_outline, color: Colors.red.shade700),
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: Text(
+                              'Connection failed. Check IP address and try again.',
+                              style: TextStyle(color: Colors.red.shade700),
+                            ),
+                          ),
+                        ],
+                      ),
                     ),
-                    child: Text(_isConnected ? 'Disconnect' : 'Connect'),
-                  ),
+                  ],
                 ],
               ),
             ),

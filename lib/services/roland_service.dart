@@ -1253,6 +1253,7 @@ class RolandService with
   final String host;
   final int port;
   final bool useSSL;
+  final String password;
   final Duration connectTimeout;
   final Duration ackTimeout;
   final Duration commandRetryDelay;
@@ -1264,6 +1265,7 @@ class RolandService with
   int _commandId = 0;
   bool _isProcessing = false;
   bool _isConnected = false;
+  bool _isAuthenticated = false;
   final StringBuffer _responseBuffer = StringBuffer();
   int _pendingCount = 0;
   static const int maxConcurrentCommands = 5;
@@ -1278,8 +1280,8 @@ class RolandService with
 
   /// Creates a new RolandService instance for communicating with a Roland V-160HD device.
   /// @example
-  /// final service = RolandService(host: '192.168.1.100', port: 8023, useSSL: false);
-  RolandService({required this.host, this.port = defaultPort, this.useSSL = false, this.connectTimeout = defaultConnectTimeout, this.ackTimeout = defaultAckTimeout, this.commandRetryDelay = defaultCommandRetryDelay}) {
+  /// final service = RolandService(host: '192.168.1.100', port: 8023, useSSL: false, password: '0000');
+  RolandService({required this.host, this.port = defaultPort, this.useSSL = false, this.password = '0000', this.connectTimeout = defaultConnectTimeout, this.ackTimeout = defaultAckTimeout, this.commandRetryDelay = defaultCommandRetryDelay}) {
     // Validate host
     if (host.isEmpty || !hostRegex.hasMatch(host)) {
       throw ValidationException('Invalid host: $host');
@@ -1322,8 +1324,44 @@ class RolandService with
             ? await SecureSocket.connect(host, port).timeout(connectTimeout)
             : await Socket.connect(host, port).timeout(connectTimeout);
         _isConnected = true;
+
+        // Set up a completer for authentication
+        final authCompleter = Completer<bool>();
+        bool authenticated = false;
+
         _socket!.listen(
-          (data) => _handleResponse(utf8.decode(data)),
+          (data) {
+            // Handle Telnet negotiation bytes (0xFF = IAC)
+            if (data.isNotEmpty && data[0] == 0xFF) {
+              // Respond to Telnet DO with WILL
+              if (data.length >= 3 && data[1] == 0xFD) {
+                _socket!.add([0xFF, 0xFB, data[2]]);
+              }
+              // Check if there's text after telnet bytes
+              int textStart = 0;
+              for (int i = 0; i < data.length; i++) {
+                if (data[i] != 0xFF && (i == 0 || data[i-1] != 0xFF)) {
+                  textStart = i;
+                  break;
+                }
+                if (data[i] == 0xFF && i + 2 < data.length) {
+                  i += 2; // Skip IAC command
+                  textStart = i + 1;
+                }
+              }
+              if (textStart > 0 && textStart < data.length) {
+                final text = utf8.decode(data.sublist(textStart), allowMalformed: true);
+                _handleAuthOrResponse(text, authCompleter, () => authenticated = true);
+              }
+            } else {
+              final text = utf8.decode(data, allowMalformed: true);
+              if (!authenticated) {
+                _handleAuthOrResponse(text, authCompleter, () => authenticated = true);
+              } else {
+                _handleResponse(text);
+              }
+            }
+          },
           onError: (error) {
             dev.log('Socket error: $error');
             _isConnected = false;
@@ -1336,13 +1374,48 @@ class RolandService with
             disconnect();
           },
         );
-        dev.log('Connected successfully');
+
+        // Wait a moment for telnet negotiation, then send password
+        await Future.delayed(const Duration(milliseconds: 500));
+        dev.log('Sending password');
+        _socket!.write('$password\r\n');
+        await _socket!.flush();
+
+        // Wait for authentication
+        final authResult = await authCompleter.future.timeout(
+          const Duration(seconds: 5),
+          onTimeout: () => false,
+        );
+
+        if (!authResult) {
+          throw ConnectionException('Authentication failed');
+        }
+
+        dev.log('Connected and authenticated successfully');
         return;
       } catch (e) {
         dev.log('Connection attempt ${attempt + 1} failed: $e');
         if (attempt == retryCount) throw ConnectionException('Connection failed after $retryCount attempts: $e');
         await Future.delayed(commandRetryDelay * (attempt + 1)); // Backoff
       }
+    }
+  }
+
+  void _handleAuthOrResponse(String text, Completer<bool> authCompleter, Function() onAuth) {
+    if (text.contains('Welcome')) {
+      onAuth();
+      if (!authCompleter.isCompleted) {
+        authCompleter.complete(true);
+      }
+    } else if (text.contains('Authentication error')) {
+      if (!authCompleter.isCompleted) {
+        authCompleter.complete(false);
+      }
+    } else if (text.contains('Enter password')) {
+      // Waiting for password, do nothing
+    } else {
+      // Regular response after auth
+      _handleResponse(text);
     }
   }
 
@@ -1437,7 +1510,7 @@ class RolandService with
       String id = parts[0];
       String cmd = parts.sublist(1).join(':');
       dev.log('Sending command ID $id: $cmd');
-      _socket!.write(cmd);
+      _socket!.write('$cmd\r\n');  // Add CR+LF terminator
       await _socket!.flush().timeout(const Duration(seconds: 5));
       await Future.delayed(Duration.zero); // Yield control to prevent blocking
     }
@@ -1446,7 +1519,9 @@ class RolandService with
 
   void _handleResponse(String data) {
     // Accumulates incoming data into buffer, checks for overflow, processes complete responses (ended by \n), parses and emits via stream
-    _responseBuffer.write(data.replaceAll('\r', ''));
+    // Strip STX (0x02) character that Roland prefixes responses with
+    String cleaned = data.replaceAll('\r', '').replaceAll('\x02', '');
+    _responseBuffer.write(cleaned);
     if (_responseBuffer.length > maxBufferSize) {
       _responseBuffer.clear();
       _responseController.addError(RolandException('Response buffer overflow'));
