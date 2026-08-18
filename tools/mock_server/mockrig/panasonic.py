@@ -110,6 +110,10 @@ class CameraMock:
         handler.send_response(status)
         handler.send_header("Content-Type", "text/plain")
         handler.send_header("Content-Length", str(len(payload)))
+        # Real cameras send no CORS headers, so the web build of the app cannot
+        # reach them from a browser at all. The mock allows it so the web target
+        # is at least testable -- see README, "Deliberate deviations".
+        handler.send_header("Access-Control-Allow-Origin", "*")
         handler.end_headers()
         handler.wfile.write(payload)
 

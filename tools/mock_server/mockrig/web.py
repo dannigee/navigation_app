@@ -518,6 +518,7 @@ class Inspector:
         handler.send_response(200)
         handler.send_header("Content-Type", content_type)
         handler.send_header("Content-Length", str(len(payload)))
+        handler.send_header("Access-Control-Allow-Origin", "*")
         handler.end_headers()
         handler.wfile.write(payload)
 

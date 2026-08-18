@@ -197,6 +197,33 @@ Documented because they matter if anyone diffs this against a real V-160HD:
    (`panasonic_service.dart:379`) percent-encodes only `#`, so a name with a
    space produces a malformed request line. That is a real client bug and is
    deliberately not papered over here.
+5. **The cameras send `Access-Control-Allow-Origin: *`.** Real AW cameras send
+   no CORS headers at all, so a browser build of the app could not reach them.
+   The mock allows it so the web target is testable. Do not read a working web
+   build against this rig as evidence that the web build would work against
+   real cameras — it would not.
+
+## Running the app against the rig
+
+**macOS** (`flutter run -d macos`) is the real deployment and exercises
+everything.
+
+**Web** (`flutter build web` + any static server) is useful for a quick look at
+the UI, with one hard limit: **Roland control cannot work in a browser at all.**
+`RolandService` uses `dart:io` sockets for raw TCP, which browsers do not
+provide. It compiles, and it fails silently — verified: pressing a macro button
+puts nothing on the wire, logs nothing to the console, and shows nothing in the
+UI.
+
+Worse, the app still reads **Live** and enters the full tab shell, because
+`isConnected` (`multi_device_control_page.dart:389`) is true if the Roland *or
+any camera* is connected. One camera connecting is enough to mask a completely
+absent switcher. The Panel tab then renders 25 enabled macro buttons that do
+nothing.
+
+Point the app at `127.0.0.1` and `127.0.0.2-4` under Settings → Connections.
+Cameras work correctly on web: preset availability, recall, names and the
+`#PE` bitmap all round-trip.
 
 ## Layout
 
