@@ -206,7 +206,27 @@ Documented because they matter if anyone diffs this against a real V-160HD:
 ## Running the app against the rig
 
 **macOS** (`flutter run -d macos`) is the real deployment and exercises
-everything.
+everything. Verified against the rig: telnet negotiation and password auth
+complete, all three cameras answer `QID`, and pressing a macro button puts
+`MCREX:MACRO7;` on the wire and gets `ACK;` back.
+
+You can skip the Connections dialog by seeding the app's preferences directly:
+
+```bash
+defaults write com.example.navigationApp flutter.roland_ip -string "127.0.0.1"
+defaults write com.example.navigationApp flutter.panasonic_cameras -string \
+  '[{"name":"Cam 1 House","ip":"127.0.0.2"},
+    {"name":"Cam 2 Sanctuary","ip":"127.0.0.3"},
+    {"name":"Cam 3 Choir","ip":"127.0.0.4"}]'
+```
+
+`drive_macos_app.sh` clicks and screenshots the running app for repeatable
+manual tests — see the header for the permissions it needs.
+
+**The demo worth showing:** connect, fire a macro (it works), press the
+inspector's socket-drop button, then fire the same macro again. The rig shows
+`clients: 0` and nothing arrives; the app still reads **Live**, the button still
+highlights on press, and no error appears anywhere.
 
 **Web** (`flutter build web` + any static server) is useful for a quick look at
 the UI, with one hard limit: **Roland control cannot work in a browser at all.**
