@@ -442,6 +442,31 @@ class Inspector:
         if action == "drop":
             self.roland.drop_all_clients("inspector chaos button")
 
+        elif action == "reset":
+            # Clear everything a test might assert on, so a run cannot pass on
+            # state left behind by an earlier one.
+            with st.lock:
+                self.rig.last_macro = None
+                self.rig.macro_running = None
+                self.rig.command_count = 0
+                self.rig.nack_count = 0
+                self.rig.freeze = False
+                self.rig.transition_progress = 0.0
+                self.rig.fault_nack_everything = False
+                self.rig.fault_swallow_acks = False
+                self.rig.fault_latency_ms = 0
+                for pinp in self.rig.pinp.values():
+                    pinp.on_pgm = False
+                    pinp.on_pvw = False
+                    pinp.h = pinp.v = 0
+                for cam in self.rig.cameras:
+                    cam.last_preset = None
+                    cam.last_preset_name = None
+            for mock in self.farm.mocks:
+                mock.offline = False
+                mock.force_busy = False
+            self.rig.log("RESET", "Rig state and faults cleared")
+
         elif action == "fault":
             with st.lock:
                 if "nackEverything" in body:
