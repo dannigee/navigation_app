@@ -38,12 +38,18 @@ PAGE = r"""<!DOCTYPE html>
            border-radius: 8px; padding: 12px; }
   .panel h2 { font-size: 11px; letter-spacing: .1em; text-transform: uppercase;
               color: var(--dim); margin: 0 0 10px; font-weight: 600; }
-  canvas { width: 100%; display: block; border-radius: 5px; background: #05070a; }
-  .cams { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px,1fr));
+  canvas { width: 100%; display: block; border-radius: 5px; background: #05070a;
+           aspect-ratio: 16 / 9; }
+  .cams { display: grid; grid-template-columns: repeat(auto-fit, minmax(250px,1fr));
           gap: 12px; margin-top: 16px; }
   .cam h3 { font-size: 12px; margin: 0 0 6px; display: flex;
             justify-content: space-between; align-items: baseline; }
   .cam .meta { color: var(--dim); font-size: 11px; }
+  .now { font-size: 13px; margin: 9px 0 0; display: flex; gap: 7px;
+         align-items: baseline; }
+  .now b { color: #ffd98a; font-weight: 600; }
+  .now .idle { color: var(--dim); font-weight: 400; }
+  .now .mv { color: #00e5c0; font-size: 11px; }
   .pills { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
   .pill { background: #1c222c; border: 1px solid var(--line); border-radius: 4px;
           padding: 3px 8px; font-size: 11px; color: var(--dim); }
@@ -80,7 +86,7 @@ PAGE = r"""<!DOCTYPE html>
   <div>
     <div class="panel">
       <h2>Program output</h2>
-      <canvas id="pgm" width="960" height="540"></canvas>
+      <canvas id="pgm"></canvas>
       <div class="pills" id="pgmPills"></div>
     </div>
     <div class="cams" id="cams"></div>
@@ -115,19 +121,8 @@ PAGE = r"""<!DOCTYPE html>
 const SOURCE_COLORS = ['#2f5d8f','#8f3030','#2f8f57','#8f7a2f','#6a2f8f',
                        '#2f8f8f','#8f5a2f','#4a4a52'];
 
-// Landmarks match the seeded preset poses in state.py, so a recall visibly
-// frames the thing the preset is named after.
-const LANDMARKS = [
-  {pan:-0.45, tilt:-0.10, label:'AMBO'},
-  {pan: 0.00, tilt:-0.05, label:'ALTAR'},
-  {pan: 0.42, tilt:-0.08, label:'CHAIR'},
-  {pan:-0.62, tilt: 0.02, label:'CANTOR'},
-  {pan: 0.10, tilt: 0.30, label:'TABERNACLE'},
-  {pan: 0.70, tilt: 0.15, label:'CHOIR'},
-  {pan: 0.00, tilt: 0.22, label:'NAVE'},
-  {pan:-0.75, tilt: 0.18, label:'FONT'},
-  {pan: 0.05, tilt: 0.45, label:'CRUCIFIX'},
-];
+// Landmarks come from each camera's own stored presets (see CameraState.snapshot),
+// so the scene always matches where that camera actually points.
 
 function srcColor(src) {
   let h = 0;
@@ -154,7 +149,8 @@ function ensureCamPanels(cams) {
     el.className = 'panel cam';
     el.innerHTML =
       `<h3><span>${cam.name}</span><span class="meta">${cam.ip}</span></h3>` +
-      `<canvas width="480" height="270"></canvas>` +
+      `<canvas></canvas>` +
+      `<div class="now" id="cn${cam.index}"></div>` +
       `<div class="pills" id="cp${cam.index}"></div>`;
     host.appendChild(el);
     camCanvases.set(cam.index, el.querySelector('canvas'));
@@ -173,60 +169,138 @@ function ensureCamPanels(cams) {
   }
 }
 
-function drawScene(ctx, w, h) {
+// Match the backing store to the element's real size so text renders at true
+// resolution instead of being downscaled into mush, and draw in CSS pixels.
+function fitCanvas(canvas) {
+  const dpr = window.devicePixelRatio || 1;
+  const rect = canvas.getBoundingClientRect();
+  const w = Math.max(1, Math.round(rect.width));
+  const h = Math.max(1, Math.round(rect.height));
+  if (canvas.width !== w * dpr || canvas.height !== h * dpr) {
+    canvas.width = w * dpr;
+    canvas.height = h * dpr;
+  }
+  const ctx = canvas.getContext('2d');
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  return {ctx, w, h};
+}
+
+// Pan/tilt of +-1.0 maps to this fraction of the half-canvas. Kept below 1 so a
+// wide frame at the edge of travel still fits inside the drawing area.
+const SCENE_SCALE = 0.66;
+
+const scenePos = (lm, w, h) => ({
+  x: w / 2 + lm.pan * (w / 2) * SCENE_SCALE,
+  y: h / 2 + lm.tilt * (h / 2) * SCENE_SCALE,
+});
+
+function drawScene(ctx, w, h, landmarks, framedNum) {
   ctx.fillStyle = '#0a0d13';
   ctx.fillRect(0, 0, w, h);
-  ctx.strokeStyle = '#1b2230';
+  ctx.strokeStyle = '#161c27';
   ctx.lineWidth = 1;
   for (let i = 1; i < 6; i++) {
     ctx.beginPath();
-    ctx.moveTo(w * i / 6, 0); ctx.lineTo(w * i / 6, h);
-    ctx.moveTo(0, h * i / 6); ctx.lineTo(w, h * i / 6);
+    ctx.moveTo(Math.round(w * i / 6) + .5, 0);
+    ctx.lineTo(Math.round(w * i / 6) + .5, h);
+    ctx.moveTo(0, Math.round(h * i / 6) + .5);
+    ctx.lineTo(w, Math.round(h * i / 6) + .5);
     ctx.stroke();
   }
-  for (const lm of LANDMARKS) {
-    const x = w / 2 + lm.pan * (w / 2) * 0.92;
-    const y = h / 2 + lm.tilt * (h / 2) * 0.92;
-    ctx.fillStyle = '#252d3d';
-    ctx.fillRect(x - 26, y - 9, 52, 18);
-    ctx.fillStyle = '#6c7a92';
-    ctx.font = '9px ui-monospace, monospace';
-    ctx.textAlign = 'center';
-    ctx.fillText(lm.label, x, y + 3);
+
+  const font = Math.max(8, Math.round(w / 40));
+  ctx.font = `${font}px ui-monospace, monospace`;
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  // Dots for every stored preset.
+  for (const lm of landmarks) {
+    const {x, y} = scenePos(lm, w, h);
+    const framed = lm.num === framedNum;
+    ctx.fillStyle = framed ? '#ffd98a' : '#4d5a70';
+    ctx.beginPath();
+    ctx.arc(x, y, framed ? 3.5 : 2, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  // Labels, framed one first so it always wins a collision. Anything that would
+  // overlap an already-drawn label is dropped -- these panels are small and a
+  // pile of overstruck text reads as noise.
+  const drawn = [];
+  const ordered = [...landmarks].sort(
+    (a, b) => (b.num === framedNum) - (a.num === framedNum));
+  for (const lm of ordered) {
+    if (!lm.label) continue;  // unnamed preset: dot only
+    const text = lm.label.toUpperCase();
+    const {x, y} = scenePos(lm, w, h);
+    const tw = ctx.measureText(text).width;
+    const box = {l: x - tw / 2, r: x + tw / 2,
+                 t: y + 2, b: y + font * 2 + 2};
+    const clash = drawn.some(d =>
+      box.l < d.r && box.r > d.l && box.t < d.b && box.b > d.t);
+    if (clash) continue;
+    drawn.push(box);
+    ctx.fillStyle = lm.num === framedNum ? '#ffd98a' : '#5b6982';
+    ctx.fillText(text, x, y + font + 2);
   }
   ctx.textAlign = 'left';
+  ctx.textBaseline = 'alphabetic';
+}
+
+// Which of this camera's presets is closest to the centre of frame, if any is
+// inside it. Returns a preset number, or null.
+function framedLandmark(cam, w, h) {
+  const fw = (w * 0.58) / cam.zoom, fh = (h * 0.58) / cam.zoom;
+  const cx = w / 2 + cam.pan * (w / 2) * SCENE_SCALE;
+  const cy = h / 2 + cam.tilt * (h / 2) * SCENE_SCALE;
+  let best = null, bestD = Infinity;
+  for (const lm of cam.landmarks) {
+    const {x, y} = scenePos(lm, w, h);
+    if (Math.abs(x - cx) > fw / 2 || Math.abs(y - cy) > fh / 2) continue;
+    const d = (x - cx) ** 2 + (y - cy) ** 2;
+    if (d < bestD) { bestD = d; best = lm.num; }
+  }
+  return best;
 }
 
 function drawCamera(cam) {
   const canvas = camCanvases.get(cam.index);
   if (!canvas) return;
-  const ctx = canvas.getContext('2d');
-  const w = canvas.width, h = canvas.height;
+  const {ctx, w, h} = fitCanvas(canvas);
 
-  drawScene(ctx, w, h);
+  const framed = framedLandmark(cam, w, h);
+  drawScene(ctx, w, h, cam.landmarks, framed);
 
   // Framing rectangle: centre follows pan/tilt, size shrinks as zoom rises.
-  const fw = (w * 0.62) / cam.zoom;
-  const fh = (h * 0.62) / cam.zoom;
-  const cx = w / 2 + cam.pan * (w / 2) * 0.92;
-  const cy = h / 2 + cam.tilt * (h / 2) * 0.92;
+  const fw = (w * 0.58) / cam.zoom;
+  const fh = (h * 0.58) / cam.zoom;
+  const cx = w / 2 + cam.pan * (w / 2) * SCENE_SCALE;
+  const cy = h / 2 + cam.tilt * (h / 2) * SCENE_SCALE;
 
   ctx.save();
-  ctx.strokeStyle = cam.moving ? '#00e5c0' : 'rgba(255,255,255,.75)';
-  ctx.lineWidth = cam.moving ? 3 : 2;
-  ctx.setLineDash(cam.moving ? [7, 5] : []);
+  ctx.strokeStyle = cam.moving ? '#00e5c0' : 'rgba(255,255,255,.8)';
+  ctx.lineWidth = 2;
+  ctx.setLineDash(cam.moving ? [6, 4] : []);
   ctx.strokeRect(cx - fw / 2, cy - fh / 2, fw, fh);
   ctx.setLineDash([]);
-  ctx.strokeStyle = 'rgba(255,255,255,.5)';
+  ctx.strokeStyle = 'rgba(255,255,255,.45)';
+  ctx.lineWidth = 1;
   ctx.beginPath();
-  ctx.moveTo(cx - 9, cy); ctx.lineTo(cx + 9, cy);
-  ctx.moveTo(cx, cy - 9); ctx.lineTo(cx, cy + 9);
+  ctx.moveTo(cx - 7, cy); ctx.lineTo(cx + 7, cy);
+  ctx.moveTo(cx, cy - 7); ctx.lineTo(cx, cy + 7);
   ctx.stroke();
-  ctx.fillStyle = cam.moving ? '#00e5c0' : 'rgba(255,255,255,.8)';
-  ctx.font = 'bold 10px ui-monospace, monospace';
-  ctx.fillText(`${cam.zoom.toFixed(1)}x${cam.moving ? '  MOVING' : ''}`,
-               cx - fw / 2 + 4, cy - fh / 2 - 5);
+  ctx.fillStyle = cam.moving ? '#00e5c0' : 'rgba(255,255,255,.85)';
+  ctx.font = `bold ${Math.max(9, Math.round(w / 34))}px ui-monospace, monospace`;
+  ctx.fillText(`${cam.zoom.toFixed(1)}x`, cx - fw / 2 + 3, cy - fh / 2 - 4);
   ctx.restore();
+
+  const now = document.getElementById('cn' + cam.index);
+  if (now) {
+    now.innerHTML = cam.lastPreset === null
+      ? '<span class="idle">no preset recalled yet</span>'
+      : `<b>${cam.lastPresetName || 'Preset ' + (cam.lastPreset + 1)}</b>` +
+        `<span class="idle">preset ${cam.lastPreset + 1}</span>` +
+        (cam.moving ? '<span class="mv">MOVING</span>' : '');
+  }
 
   const pills = document.getElementById('cp' + cam.index);
   if (pills) {
@@ -239,9 +313,7 @@ function drawCamera(cam) {
 }
 
 function drawProgram(s) {
-  const canvas = document.getElementById('pgm');
-  const ctx = canvas.getContext('2d');
-  const w = canvas.width, h = canvas.height;
+  const {ctx, w, h} = fitCanvas(document.getElementById('pgm'));
 
   ctx.fillStyle = srcColor(s.pgm);
   ctx.fillRect(0, 0, w, h);
@@ -342,9 +414,8 @@ class Inspector:
                     inspector._send(self, PAGE, "text/html; charset=utf-8")
 
             def do_POST(self):  # noqa: N802
-                length = int(self.headers.get("Content-Length") or 0)
                 try:
-                    body = json.loads(self.rfile.read(length) or b"{}")
+                    body = json.loads(inspector._read_body(self) or b"{}")
                 except json.JSONDecodeError:
                     body = {}
                 inspector._control(body)
@@ -393,17 +464,54 @@ class Inspector:
             mock = self.farm.by_ip(body.get("ip", ""))
             if mock:
                 which = body.get("fault")
+                # "value" sets the flag explicitly; omitting it toggles, which is
+                # what the inspector buttons want. Scripts should pass a value so
+                # an aborted run cannot leave a camera stuck offline.
+                explicit = body.get("value")
                 if which == "offline":
-                    mock.offline = not mock.offline
+                    mock.offline = (
+                        not mock.offline if explicit is None else bool(explicit)
+                    )
                     stateword = "unreachable" if mock.offline else "reachable"
                 elif which == "busy":
-                    mock.force_busy = not mock.force_busy
+                    mock.force_busy = (
+                        not mock.force_busy if explicit is None else bool(explicit)
+                    )
                     stateword = "busy (ER2)" if mock.force_busy else "normal"
                 else:
                     return
                 self.rig.log("FAULT", f"{mock.camera.name} is now {stateword}")
 
     # -- transport helpers -----------------------------------------------
+
+    @staticmethod
+    def _read_body(handler):
+        """Read a request body under either framing.
+
+        Dart's HttpClient uses chunked transfer encoding whenever contentLength
+        is not set explicitly, so reading Content-Length alone silently yields
+        an empty body and every control request becomes a no-op.
+        """
+        encoding = (handler.headers.get("Transfer-Encoding") or "").lower()
+        if "chunked" not in encoding:
+            length = int(handler.headers.get("Content-Length") or 0)
+            return handler.rfile.read(length) if length else b""
+
+        chunks = bytearray()
+        while True:
+            size_line = handler.rfile.readline().split(b";", 1)[0].strip()
+            if not size_line:
+                break
+            try:
+                size = int(size_line, 16)
+            except ValueError:
+                break
+            if size == 0:
+                handler.rfile.readline()  # trailing CRLF after the last chunk
+                break
+            chunks += handler.rfile.read(size)
+            handler.rfile.readline()  # CRLF terminating this chunk
+        return bytes(chunks)
 
     def _send(self, handler, text, content_type):
         payload = text.encode("utf-8")

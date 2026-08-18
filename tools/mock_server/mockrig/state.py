@@ -35,16 +35,16 @@ def _preset(pan, tilt, zoom):
 # Seeded presets, named for where they'd actually point in a sanctuary. Index is
 # the 0-based preset number the app uses; the UI displays these 1-based.
 SEED_PRESETS = {
-    0: ("Wide", _preset(0.0, 0.0, 1.0)),
-    1: ("Ambo", _preset(-0.45, -0.10, 2.4)),
-    2: ("Altar", _preset(0.0, -0.05, 1.8)),
-    3: ("Presider Chair", _preset(0.42, -0.08, 2.2)),
-    4: ("Cantor", _preset(-0.62, 0.02, 2.8)),
-    5: ("Tabernacle", _preset(0.10, 0.30, 3.0)),
-    6: ("Choir", _preset(0.70, 0.15, 1.6)),
-    7: ("Congregation", _preset(0.0, 0.22, 1.2)),
-    8: ("Font", _preset(-0.75, 0.18, 2.6)),
-    9: ("Crucifix", _preset(0.05, 0.45, 3.4)),
+    0: ("Wide", _preset(0.00, 0.02, 1.0)),
+    1: ("Ambo", _preset(-0.44, -0.34, 2.4)),
+    2: ("Altar", _preset(0.06, -0.30, 1.8)),
+    3: ("Presider Chair", _preset(0.48, -0.16, 2.2)),
+    4: ("Cantor", _preset(-0.66, 0.14, 2.8)),
+    5: ("Tabernacle", _preset(0.20, 0.40, 3.0)),
+    6: ("Choir", _preset(0.62, 0.60, 1.6)),
+    7: ("Congregation", _preset(-0.16, 0.64, 1.2)),
+    8: ("Font", _preset(-0.70, 0.42, 2.6)),
+    9: ("Crucifix", _preset(0.34, -0.62, 3.4)),
 }
 
 
@@ -62,6 +62,11 @@ class CameraState:
         self.zoom = 1.0
         self.moving = False
         self.power = True
+
+        # Last preset recalled, so the inspector can name what we're framing
+        # rather than making the operator infer it from coordinates.
+        self.last_preset = None
+        self.last_preset_name = None
 
         # preset number (0-99) -> {"pan","tilt","zoom"}
         self.presets = {}
@@ -93,7 +98,21 @@ class CameraState:
             "moving": self.moving,
             "power": self.power,
             "presetCount": len(self.presets),
-            "presetNames": dict(self.preset_names),
+            "lastPreset": self.last_preset,
+            "lastPresetName": self.last_preset_name,
+            # The stored presets *are* the landmarks for this camera. Derived
+            # here rather than hardcoded in the page, so a camera's scene always
+            # matches where that camera actually points -- including the
+            # per-camera skew applied in __init__.
+            "landmarks": [
+                {
+                    "num": num,
+                    "label": self.preset_names.get(num, ""),
+                    "pan": round(pose["pan"], 4),
+                    "tilt": round(pose["tilt"], 4),
+                }
+                for num, pose in sorted(self.presets.items())
+            ],
         }
 
     def preset_entries_hex(self, rng):

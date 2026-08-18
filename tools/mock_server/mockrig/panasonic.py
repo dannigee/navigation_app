@@ -136,6 +136,9 @@ class CameraMock:
                 target = cam.presets.get(num)
             if target is None:
                 return "ER3"  # no such preset stored
+            with st.lock:
+                cam.last_preset = num
+                cam.last_preset_name = cam.preset_names.get(num)
             threading.Thread(
                 target=st.animate_camera,
                 args=(self.rig, cam, dict(target)),
@@ -162,6 +165,9 @@ class CameraMock:
             with st.lock:
                 cam.presets.pop(num, None)
                 cam.preset_names.pop(num, None)
+                if cam.last_preset == num:
+                    cam.last_preset = None
+                    cam.last_preset_name = None
             self.rig.log("PTZ", f"{cam.name} deleted preset {num}")
             return f"s{num:02d}"
 

@@ -78,6 +78,9 @@ class RolandMock:
         self.password = password
         self._server = None
         self._clients = []
+        # Sockets we closed on purpose. Their reader threads will raise, and
+        # that is expected rather than a failure worth reporting as one.
+        self._dropped = set()
         self._clients_lock = threading.Lock()
         self._stop = threading.Event()
 
@@ -107,6 +110,7 @@ class RolandMock:
         with self._clients_lock:
             victims = list(self._clients)
             self._clients.clear()
+            self._dropped.update(id(c) for c in victims)
         for conn in victims:
             try:
                 # RST rather than FIN, so the client sees an error not a clean
@@ -118,8 +122,15 @@ class RolandMock:
                 conn.close()
             except OSError:
                 pass
+        # Always log, including the zero case: a chaos button that silently does
+        # nothing when nothing is connected is indistinguishable from one that is
+        # broken.
         if victims:
             self.rig.log("CHAOS", f"Dropped {len(victims)} TCP client(s): {reason}")
+        elif reason != "shutdown":
+            self.rig.log(
+                "CHAOS", f"Drop requested ({reason}) but no client was connected"
+            )
         return len(victims)
 
     def _accept_loop(self):
@@ -182,11 +193,15 @@ class RolandMock:
                         continue
                     self._dispatch(conn, peer, command)
         except OSError as exc:
-            self.rig.log("DISC", f"{peer} dropped: {exc}")
+            with self._clients_lock:
+                deliberate = id(conn) in self._dropped
+            if not deliberate:
+                self.rig.log("DISC", f"{peer} dropped: {exc}")
         finally:
             with self._clients_lock:
                 if conn in self._clients:
                     self._clients.remove(conn)
+                self._dropped.discard(id(conn))
             with st.lock:
                 self.rig.clients = max(0, self.rig.clients - 1)
             try:

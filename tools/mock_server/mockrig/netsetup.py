@@ -41,7 +41,17 @@ class AliasManager:
             return []
 
         for ip in ips:
-            if ip == "127.0.0.1" or self._exists(ip):
+            if ip == "127.0.0.1":
+                continue
+            if self._exists(ip):
+                # Pre-existing: adopt it for this run but do not remove it on
+                # exit, since we did not create it. Usually the residue of a
+                # previous run that was killed hard rather than interrupted.
+                self.log(
+                    "NET",
+                    f"Loopback alias {ip} already present; leaving it in place "
+                    f"on exit (remove with: sudo ifconfig lo0 -alias {ip})",
+                )
                 continue
             result = subprocess.run(
                 ["ifconfig", LOOPBACK_IF, "alias", ip, "255.255.255.255"],

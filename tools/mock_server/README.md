@@ -45,8 +45,12 @@ specify a port, so each mock camera has to answer on its own address at port
 the church's actual camera addresses onto this Mac would shadow the real
 cameras if the alias were ever left in place before a service.
 
-Aliases created at startup are removed on Ctrl-C. If the process is killed
-uncleanly, remove them by hand:
+Aliases created at startup are removed on Ctrl-C, and also if startup fails
+part-way (a port clash, say). An alias that already existed when the rig started
+is adopted for the run but deliberately left in place on exit, since we did not
+create it — the rig says so at startup when this happens.
+
+If the process is killed with SIGKILL no handler runs, so remove them by hand:
 
 ```bash
 sudo ifconfig lo0 -alias 127.0.0.2
@@ -66,6 +70,56 @@ dart run tools/mock_server/verify.dart       # terminal 2
 ```
 
 Last run: **34 passed, 0 failed** (Flutter 3.47.0 / Dart 3.13.0, macOS).
+
+## Proving the bugs
+
+`chaos_demo.dart` injects each fault into the rig and lets the real client cope,
+so the failure modes below are observed rather than argued:
+
+```bash
+dart run tools/mock_server/chaos_demo.dart
+```
+
+Results as of this commit:
+
+**1. The ACK desync is permanent.** With responses swallowed, `CUT` fails after
+20.6 s (4 attempts × 5 s). With the fault switched back **off** and the rig fully
+healthy, the next `CUT` *still* times out after 20.6 s. The queue never recovers
+— every subsequent command is answering someone else's orphaned completer.
+
+**2. A dropped socket is unobservable.** After the drop, commands throw
+`ConnectionException: Not connected` instantly and nothing reconnects. There is
+no public connection state on `RolandService` at all, so
+`multi_device_control_page` keeps `_rolandConnected` true and the UI still reads
+**Live**.
+
+**3. The camera deadlock is worse than a hang.** One unreachable-camera timeout
+wedges `_isProcessing` permanently. Afterwards, with the camera reachable and
+answering, `recallPreset` never completes — no timeout, no error. The rethrow
+also escapes as an *uncatchable* async error, because `_processQueue()` is
+called fire-and-forget at `panasonic_service.dart:91`; no caller can catch it,
+and in the app it reaches the Flutter zone handler and is logged, never shown.
+
+## Fault control API
+
+The inspector buttons toggle; scripts should set explicitly so an aborted run
+cannot leave a camera stuck offline.
+
+```bash
+curl -X POST -H 'Content-Type: application/json' \
+  -d '{"action":"fault","swallowAcks":true,"latencyMs":500}' \
+  http://127.0.0.1:8080/control
+
+curl -X POST -H 'Content-Type: application/json' \
+  -d '{"action":"camera","ip":"127.0.0.2","fault":"offline","value":true}' \
+  http://127.0.0.1:8080/control
+
+curl -X POST -H 'Content-Type: application/json' \
+  -d '{"action":"drop"}' http://127.0.0.1:8080/control
+```
+
+Omitting `value` toggles. `action: "drop"` logs even when nothing was connected,
+so the button is never silently a no-op.
 
 ## What it emulates
 
@@ -150,6 +204,7 @@ Documented because they matter if anyone diffs this against a real V-160HD:
 tools/mock_server/
 ├── run.py              CLI entry point, lifecycle, signal handling
 ├── verify.dart         checks the rig using the app's real service classes
+├── chaos_demo.dart     reproduces the three failure modes against that client
 └── mockrig/
     ├── state.py        rig + camera state, PTZ easing, preset bitmaps
     ├── roland.py       TCP: telnet, auth, command grammar, STX/ACK framing

@@ -22,6 +22,7 @@ not touch this server.
 """
 
 import argparse
+import errno
 import os
 import signal
 import sys
@@ -101,9 +102,25 @@ def main():
         host=args.inspector_host, port=args.inspector_port,
     )
 
-    roland_mock.start()
-    farm.start()
-    inspector.start()
+    # Any failure past this point must undo the loopback aliases, or a port
+    # clash leaves the machine with addresses nothing is serving.
+    try:
+        roland_mock.start()
+        farm.start()
+        inspector.start()
+    except OSError as exc:
+        inspector.stop()
+        farm.stop()
+        roland_mock.stop()
+        aliases.teardown()
+        if exc.errno == errno.EADDRINUSE:
+            sys.exit(
+                f"\nPort already in use: {exc}\n"
+                "Another copy of the rig is probably still running.\n"
+                "  Check:  pgrep -fl mock_server/run.py\n"
+                "  Stop:   sudo pkill -f mock_server/run.py"
+            )
+        sys.exit(f"\nFailed to start: {exc}")
 
     print()
     print("  Point the app at:")
