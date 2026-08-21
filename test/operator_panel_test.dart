@@ -191,17 +191,38 @@ void main() {
     });
   });
 
-  // VisibilityStore is no longer used by OperatorPanel — confirm independence.
-  group('OperatorPanel — no dependency on VisibilityStore', () {
-    testWidgets(
-        'Default operator shows all items regardless of saved visibility',
+  group('OperatorPanel — VisibilityStore', () {
+    testWidgets('hides an item marked hidden, for every operator',
         (tester) async {
-      // Tag macro 1 as hidden in VisibilityStore — should have no effect
-      await VisibilityStore.save('roland_', 1, ItemVisibility.hide);
+      await VisibilityStore.save('roland_', 1, ItemVisibility.hidden);
       await tester.pumpWidget(_build());
       await tester.pumpAndSettle();
-      // Macro 1 should still appear (OperatorPanel ignores VisibilityStore)
-      expect(find.text('Macro 1'), findsWidgets);
+      expect(find.text('Macro 1'), findsNothing);
+    });
+
+    testWidgets('leaves items with no saved visibility shown',
+        (tester) async {
+      await VisibilityStore.save('roland_', 1, ItemVisibility.hidden);
+      await tester.pumpWidget(_build());
+      await tester.pumpAndSettle();
+      expect(find.text('Macro 2'), findsOneWidget);
+    });
+
+    testWidgets(
+        'hiding wins even when a custom operator explicitly allows the item',
+        (tester) async {
+      await VisibilityStore.save('roland_', 1, ItemVisibility.hidden);
+      const custom = OperatorProfile(
+        id: 'custom',
+        name: 'Custom',
+        items: {
+          'roland_': [1, 2]
+        },
+      );
+      await tester.pumpWidget(_build(operator: custom));
+      await tester.pumpAndSettle();
+      expect(find.text('Macro 1'), findsNothing);
+      expect(find.text('Macro 2'), findsOneWidget);
     });
   });
 

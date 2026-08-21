@@ -34,7 +34,7 @@ class _MasterControlWidgetState extends State<MasterControlWidget> {
 
   final Map<int, Map<int, String>> _namesByDevice = {};
   final Map<int, Map<int, ItemVisibility>> _visibilityByDevice = {};
-  ItemVisibility _selectedVisibility = ItemVisibility.expanded;
+  ItemVisibility _selectedVisibility = ItemVisibility.visible;
 
   final TextEditingController _renameController = TextEditingController();
   final List<VoidCallback> _deviceListeners = [];
@@ -112,7 +112,7 @@ class _MasterControlWidgetState extends State<MasterControlWidget> {
       _selectedDeviceIndex = index;
       _selectedItemIndex = null;
       _renameController.clear();
-      _selectedVisibility = ItemVisibility.expanded;
+      _selectedVisibility = ItemVisibility.visible;
     });
     _loadDeviceMetadata(index);
     _refreshSelectedDevice();
@@ -133,7 +133,7 @@ class _MasterControlWidgetState extends State<MasterControlWidget> {
     setState(() {
       _selectedItemIndex = index;
       _renameController.text = names[index] ?? '';
-      _selectedVisibility = visibility[index] ?? ItemVisibility.expanded;
+      _selectedVisibility = visibility[index] ?? ItemVisibility.visible;
     });
   }
 
@@ -281,19 +281,14 @@ class _MasterControlWidgetState extends State<MasterControlWidget> {
             SegmentedButton<ItemVisibility>(
               segments: const [
                 ButtonSegment(
-                  value: ItemVisibility.hide,
-                  label: Text('Hide'),
+                  value: ItemVisibility.visible,
+                  label: Text('Visible'),
+                  icon: Icon(Icons.visibility),
+                ),
+                ButtonSegment(
+                  value: ItemVisibility.hidden,
+                  label: Text('Hidden'),
                   icon: Icon(Icons.visibility_off),
-                ),
-                ButtonSegment(
-                  value: ItemVisibility.expanded,
-                  label: Text('Expanded'),
-                  icon: Icon(Icons.dashboard_customize),
-                ),
-                ButtonSegment(
-                  value: ItemVisibility.basic,
-                  label: Text('Basic'),
-                  icon: Icon(Icons.view_agenda),
                 ),
               ],
               selected: {_selectedVisibility},

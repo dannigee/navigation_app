@@ -1,9 +1,12 @@
 import 'dart:convert';
 import 'package:shared_preferences/shared_preferences.dart';
 
-/// Where a macro/preset button should appear. Not yet consumed anywhere —
-/// the pages that filter on this live elsewhere.
-enum ItemVisibility { hide, expanded, basic }
+/// Whether a macro/preset button should appear in OperatorPanel at all,
+/// for every operator (including Default). This is a global suppression
+/// layer underneath OperatorProfile.items' per-operator allow-list: a
+/// hidden item stays hidden even for an operator whose list explicitly
+/// includes it.
+enum ItemVisibility { visible, hidden }
 
 /// Stores per-item visibility locally, keyed by device IP (or `roland_<ip>`)
 /// and 1-based macro number / 0-based preset index — same keying convention
