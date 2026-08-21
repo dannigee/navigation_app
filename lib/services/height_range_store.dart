@@ -1,5 +1,6 @@
 import 'dart:convert';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'backup/config_mutation_notifier.dart';
 import '../models/height_range.dart';
 
 class HeightRangeStore {
@@ -16,8 +17,15 @@ class HeightRangeStore {
   }
 
   static Future<void> saveAll(List<HeightRange> ranges) async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setString(
-        _key, jsonEncode(ranges.map((r) => r.toJson()).toList()));
+    await ConfigMutationNotifier.instance.runExclusive(() async {
+      final prefs = await SharedPreferences.getInstance();
+      final persisted = await prefs.setString(
+          _key, jsonEncode(ranges.map((r) => r.toJson()).toList()));
+      if (!persisted) {
+        await prefs.reload();
+        throw StateError('Could not persist height ranges');
+      }
+      await ConfigMutationNotifier.instance.notify();
+    });
   }
 }

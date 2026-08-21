@@ -1,5 +1,6 @@
 import 'dart:convert';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'backup/config_mutation_notifier.dart';
 import '../models/service.dart';
 
 class ServiceStore {
@@ -16,8 +17,15 @@ class ServiceStore {
   }
 
   static Future<void> saveAll(List<Service> services) async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setString(
-        _key, jsonEncode(services.map((s) => s.toJson()).toList()));
+    await ConfigMutationNotifier.instance.runExclusive(() async {
+      final prefs = await SharedPreferences.getInstance();
+      final persisted = await prefs.setString(
+          _key, jsonEncode(services.map((s) => s.toJson()).toList()));
+      if (!persisted) {
+        await prefs.reload();
+        throw StateError('Could not persist services');
+      }
+      await ConfigMutationNotifier.instance.notify();
+    });
   }
 }

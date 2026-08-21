@@ -1,5 +1,6 @@
 import 'dart:convert';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'backup/config_mutation_notifier.dart';
 
 /// Where a macro/preset button should appear. Not yet consumed anywhere —
 /// the pages that filter on this live elsewhere.
@@ -17,17 +18,24 @@ class VisibilityStore {
     final raw = prefs.getString(_key(deviceKey));
     if (raw == null) return {};
     final decoded = jsonDecode(raw) as Map<String, dynamic>;
-    return decoded.map(
-        (k, v) => MapEntry(int.parse(k), ItemVisibility.values.byName(v as String)));
+    return decoded.map((k, v) =>
+        MapEntry(int.parse(k), ItemVisibility.values.byName(v as String)));
   }
 
   /// Saves [visibility] for [itemIndex] on [deviceKey].
   static Future<void> save(
       String deviceKey, int itemIndex, ItemVisibility visibility) async {
-    final prefs = await SharedPreferences.getInstance();
-    final existing = await loadAll(deviceKey);
-    existing[itemIndex] = visibility;
-    await prefs.setString(_key(deviceKey),
-        jsonEncode(existing.map((k, v) => MapEntry('$k', v.name))));
+    await ConfigMutationNotifier.instance.runExclusive(() async {
+      final prefs = await SharedPreferences.getInstance();
+      final existing = await loadAll(deviceKey);
+      existing[itemIndex] = visibility;
+      final persisted = await prefs.setString(_key(deviceKey),
+          jsonEncode(existing.map((k, v) => MapEntry('$k', v.name))));
+      if (!persisted) {
+        await prefs.reload();
+        throw StateError('Could not persist item visibility');
+      }
+      await ConfigMutationNotifier.instance.notify();
+    });
   }
 }
