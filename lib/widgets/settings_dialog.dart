@@ -170,6 +170,7 @@ class SettingsDialog extends StatelessWidget {
         positions: positions,
         cameras: panasonicCameras,
         onSaved: onServicesChanged,
+        rolandIpController: rolandIpController,
       ),
     );
   }

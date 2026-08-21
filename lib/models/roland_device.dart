@@ -42,6 +42,9 @@ class RolandDevice extends ControllableDevice {
   String defaultLabel(int index) => 'Macro $index';
 
   @override
+  String numberSuffix(int index) => '$index';
+
+  @override
   Future<void> refreshItems() async {}
 
   @override

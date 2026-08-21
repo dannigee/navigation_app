@@ -19,6 +19,7 @@ import 'operator_store.dart';
 import 'people_store.dart';
 import 'position_store.dart';
 import 'service_store.dart';
+import 'visibility_store.dart';
 
 class ConfigBundle {
   /// Schema version of the source document.
@@ -163,7 +164,6 @@ class ConfigBundle {
   }
 
   static const _presetPrefix = 'preset_names_';
-  static const _visibilityPrefix = 'item_visibility_';
 
   static Future<ConfigBundle> fromStores() async {
     final results = await Future.wait([
@@ -186,8 +186,8 @@ class ConfigBundle {
           presetNames[deviceKey] =
               decoded.map((k, v) => MapEntry(k, v as String));
         }
-      } else if (key.startsWith(_visibilityPrefix)) {
-        final deviceKey = key.substring(_visibilityPrefix.length);
+      } else if (key.startsWith(VisibilityStore.keyPrefix)) {
+        final deviceKey = key.substring(VisibilityStore.keyPrefix.length);
         final raw = prefs.getString(key);
         if (raw != null) {
           final decoded = jsonDecode(raw) as Map<String, dynamic>;
@@ -234,6 +234,7 @@ class ConfigBundle {
     required bool markAsPending,
   }) async {
     var written = 0;
+    var visibilityChanged = false;
     void tick() {
       written++;
       if (failAfterWritesForTest != null && written >= failAfterWritesForTest) {
@@ -271,7 +272,8 @@ class ConfigBundle {
         // deleted. This is the correction to today's behaviour, where the
         // loops only setString keys that are present and never remove others.
         await _replacePrefixed(prefs, _presetPrefix, presetNames, tick);
-        await _replacePrefixed(prefs, _visibilityPrefix, visibilities, tick);
+        visibilityChanged = await _replacePrefixed(
+            prefs, VisibilityStore.keyPrefix, visibilities, tick);
       });
 
       // Imported state is unprovenanced pending work. The engine
@@ -283,6 +285,13 @@ class ConfigBundle {
         await ConfigMutationNotifier.instance.notify();
       }
       await RestoreJournal.clear();
+
+      // An already-mounted OperatorPanel caches visibility from its own
+      // loadAll. These writes went through the journal rather than through
+      // VisibilityStore, so nothing else bumps the counter it listens on.
+      // Deliberately outside suspendWhile: a pulled restore changes what the
+      // operator sees just as much as a manual import does.
+      if (visibilityChanged) VisibilityStore.changes.value++;
     } catch (error, stackTrace) {
       try {
         await RestoreJournal.rollbackIfPresent();
@@ -306,12 +315,16 @@ class ConfigBundle {
     }
   }
 
-  static Future<void> _replacePrefixed(
+  /// Returns whether any key under [prefix] was removed or rewritten, so the
+  /// caller can signal already-mounted widgets only when their cached view
+  /// actually went stale.
+  static Future<bool> _replacePrefixed(
     SharedPreferences prefs,
     String prefix,
     Map<String, Map<String, String>> incoming,
     void Function() tick,
   ) async {
+    var mutated = false;
     for (final k
         in prefs.getKeys().where((k) => k.startsWith(prefix)).toList()) {
       if (!incoming.containsKey(k.substring(prefix.length))) {
@@ -319,6 +332,7 @@ class ConfigBundle {
           await prefs.reload();
           throw StateError('Could not remove $k');
         }
+        mutated = true;
         tick();
       }
     }
@@ -328,8 +342,10 @@ class ConfigBundle {
         await prefs.reload();
         throw StateError('Could not persist $prefix${entry.key}');
       }
+      mutated = true;
       tick();
     }
+    return mutated;
   }
 
   /// Suggested default export path using the platform Documents folder.

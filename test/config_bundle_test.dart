@@ -9,6 +9,7 @@ import 'package:navigation_app/services/height_range_store.dart';
 import 'package:navigation_app/services/people_store.dart';
 import 'package:navigation_app/services/position_store.dart';
 import 'package:navigation_app/services/service_store.dart';
+import 'package:navigation_app/services/visibility_store.dart';
 
 ConfigBundle _full() => ConfigBundle(
       schemaVersion: ConfigBundle.currentSchemaVersion,
@@ -205,6 +206,46 @@ void main() {
       final visRaw = prefs.getString('item_visibility_roland_10.0.1.20');
       expect(visRaw, isNotNull);
       expect(visRaw, contains('basic'));
+    });
+
+    test(
+        'applyTransactionally bumps VisibilityStore.changes so an '
+        'already-mounted OperatorPanel reloads imported visibility', () async {
+      final before = VisibilityStore.changes.value;
+      await _full().applyTransactionally();
+      expect(VisibilityStore.changes.value, greaterThan(before));
+    });
+
+    test(
+        'applyTransactionally does not bump VisibilityStore.changes when '
+        'nothing under the visibility prefix changed', () async {
+      const bundle = ConfigBundle(
+        schemaVersion: ConfigBundle.currentSchemaVersion,
+        positions: [],
+        people: [],
+        services: [],
+      );
+      final before = VisibilityStore.changes.value;
+      await bundle.applyTransactionally();
+      expect(VisibilityStore.changes.value, before);
+    });
+
+    test(
+        'applyTransactionally bumps VisibilityStore.changes when the bundle '
+        'deletes visibility the machine already had', () async {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString(
+          'item_visibility_roland_10.0.1.20', '{"3":"hidden"}');
+      const bundle = ConfigBundle(
+        schemaVersion: ConfigBundle.currentSchemaVersion,
+        positions: [],
+        people: [],
+        services: [],
+      );
+      final before = VisibilityStore.changes.value;
+      await bundle.applyTransactionally();
+      expect(prefs.getString('item_visibility_roland_10.0.1.20'), isNull);
+      expect(VisibilityStore.changes.value, greaterThan(before));
     });
 
     test(

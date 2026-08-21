@@ -1,6 +1,7 @@
 import 'package:flutter/foundation.dart';
 import '../services/preset_name_store.dart';
 import '../services/visibility_store.dart';
+import '../utils/label_utils.dart';
 import 'service.dart';
 
 /// Base class for a controllable device (Roland V-160HD macros, Panasonic presets, etc.).
@@ -34,6 +35,16 @@ abstract class ControllableDevice {
   /// Human-readable description of [index] used in response/confirmation text.
   /// Defaults to [defaultLabel]; override for richer descriptions (e.g. 'Preset 5').
   String describe(int index) => defaultLabel(index);
+
+  /// Bare number shown in parentheses alongside a custom name -- e.g. "13"
+  /// for Roland macro 13, "4" for Panasonic preset index 3 (1-based).
+  String numberSuffix(int index);
+
+  /// Display label for [index]: "name (N)" when [name] is a non-empty custom
+  /// name, otherwise just [defaultLabel]. The bare number stays visible next
+  /// to a custom name so a renamed item can still be identified by number.
+  String labelFor(int index, String? name) =>
+      formatItemLabel(name, numberSuffix(index), fallback: defaultLabel(index));
 
   /// Message shown when [itemIndices] is empty and [isLoadingItems] is false.
   String get emptyMessage => 'No items available';

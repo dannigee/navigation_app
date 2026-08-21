@@ -77,7 +77,7 @@ void main() {
     });
 
     test('deletes visibility keys absent from the incoming bundle', () async {
-      await VisibilityStore.save('roland_10.0.1.20', 5, ItemVisibility.hide);
+      await VisibilityStore.save('roland_10.0.1.20', 5, ItemVisibility.hidden);
       await ConfigBundle.fromJsonValidated(bundleJson()).applyTransactionally();
       expect(await VisibilityStore.loadAll('roland_10.0.1.20'), isEmpty);
     });

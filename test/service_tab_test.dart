@@ -1,10 +1,14 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:navigation_app/models/height_range.dart';
 import 'package:navigation_app/models/panasonic_camera_config.dart';
 import 'package:navigation_app/models/person.dart';
 import 'package:navigation_app/models/position.dart';
 import 'package:navigation_app/models/service.dart';
+import 'package:navigation_app/services/abstract/roland_service_abstract.dart';
+import 'package:navigation_app/services/mock/mock_roland_service.dart';
+import 'package:navigation_app/services/preset_name_store.dart';
 import 'package:navigation_app/widgets/service_tab.dart';
 
 Widget _wrap(Widget child) => MaterialApp(home: Scaffold(body: child));
@@ -16,6 +20,9 @@ ServiceTab _tab({
   List<Service> services = const [],
   List<HeightRange> heightRanges = const [],
   ValueChanged<String>? onResponse,
+  RolandServiceAbstract? rolandService,
+  ValueNotifier<bool>? rolandConnected,
+  TextEditingController? rolandIpController,
 }) =>
     ServiceTab(
       cameras: cameras,
@@ -23,12 +30,15 @@ ServiceTab _tab({
       positions: positions,
       services: services,
       heightRanges: heightRanges,
-      rolandService: null,
-      rolandConnected: null,
+      rolandService: rolandService,
+      rolandConnected: rolandConnected,
+      rolandIpController: rolandIpController,
       onResponse: onResponse ?? (_) {},
     );
 
 void main() {
+  setUp(() => SharedPreferences.setMockInitialValues({}));
+
   group('ServiceTab — empty state', () {
     testWidgets('shows "No services configured" when service list is empty',
         (tester) async {
@@ -497,6 +507,174 @@ void main() {
       // The two steps from the sub-service should appear
       expect(find.textContaining('Macro 10'), findsOneWidget);
       expect(find.textContaining('Macro 11'), findsOneWidget);
+    });
+  });
+
+  group('ServiceTab — named macro/preset display', () {
+    testWidgets('a named macro step tile shows "name (number)"',
+        (tester) async {
+      await PresetNameStore.save('roland_', 3, 'Opening Wide');
+      final service = Service(
+        id: 's1',
+        name: 'Mass',
+        steps: [
+          const ServiceStep(id: 'st1', type: StepType.macro, macroNumber: 3),
+        ],
+      );
+
+      await tester.pumpWidget(_wrap(_tab(services: [service])));
+      await tester.tap(find.byType(DropdownButton<String?>));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Mass').last);
+      await tester.pumpAndSettle();
+
+      expect(find.textContaining('Opening Wide (3)'), findsOneWidget);
+    });
+
+    testWidgets('an unnamed macro step tile still shows "Macro N"',
+        (tester) async {
+      final service = Service(
+        id: 's1',
+        name: 'Mass',
+        steps: [
+          const ServiceStep(id: 'st1', type: StepType.macro, macroNumber: 3),
+        ],
+      );
+
+      await tester.pumpWidget(_wrap(_tab(services: [service])));
+      await tester.tap(find.byType(DropdownButton<String?>));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Mass').last);
+      await tester.pumpAndSettle();
+
+      expect(find.textContaining('Macro 3'), findsOneWidget);
+    });
+
+    testWidgets('a named shot step tile shows "name (number)"', (tester) async {
+      final cam = PanasonicCameraConfig(name: 'Cam 1', ipAddress: '10.0.1.10');
+      addTearDown(cam.dispose);
+      await PresetNameStore.save('10.0.1.10', 3, 'Cantor');
+      final service = Service(
+        id: 's1',
+        name: 'Mass',
+        steps: [
+          const ServiceStep(
+              id: 'st1',
+              type: StepType.shot,
+              cameraIp: '10.0.1.10',
+              cameraPresetIndex: 3),
+        ],
+      );
+
+      await tester.pumpWidget(_wrap(_tab(services: [service], cameras: [cam])));
+      await tester.tap(find.byType(DropdownButton<String?>));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Mass').last);
+      await tester.pumpAndSettle();
+
+      expect(find.textContaining('Cantor (4)'), findsOneWidget);
+    });
+
+    testWidgets('firing a named macro step includes the name in the response',
+        (tester) async {
+      await PresetNameStore.save('roland_', 3, 'Opening Wide');
+      final service = Service(
+        id: 's1',
+        name: 'Mass',
+        steps: [
+          const ServiceStep(id: 'st1', type: StepType.macro, macroNumber: 3),
+        ],
+      );
+
+      String? response;
+      await tester.pumpWidget(_wrap(_tab(
+        services: [service],
+        rolandService: MockRolandService(),
+        rolandConnected: ValueNotifier(true),
+        onResponse: (r) => response = r,
+      )));
+      await tester.tap(find.byType(DropdownButton<String?>));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Mass').last);
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.textContaining('Opening Wide (3)'));
+      await tester.pumpAndSettle();
+
+      expect(response, 'Opening Wide (3) executed');
+    });
+  });
+
+  group('ServiceTab — reloading names when device config changes', () {
+    testWidgets(
+        'reloads names when the Roland IP changes while the tab stays mounted',
+        (tester) async {
+      final ipCtrl = TextEditingController(text: '10.0.1.20');
+      addTearDown(ipCtrl.dispose);
+      final service = Service(
+        id: 's1',
+        name: 'Mass',
+        steps: [
+          const ServiceStep(id: 'st1', type: StepType.macro, macroNumber: 3),
+        ],
+      );
+
+      await tester.pumpWidget(_wrap(
+          _tab(services: [service], rolandIpController: ipCtrl)));
+      await tester.tap(find.byType(DropdownButton<String?>));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Mass').last);
+      await tester.pumpAndSettle();
+
+      expect(find.textContaining('Macro 3'), findsOneWidget);
+
+      // Simulate Settings -> Connections repointing at a different Roland,
+      // with a name already saved under the new IP's key, while this tab
+      // stays mounted (no full teardown/rebuild of ServiceTab itself).
+      await PresetNameStore.save('roland_10.0.1.30', 3, 'Opening Wide');
+      ipCtrl.text = '10.0.1.30';
+      await tester.pumpWidget(_wrap(
+          _tab(services: [service], rolandIpController: ipCtrl)));
+      await tester.pumpAndSettle();
+
+      expect(find.textContaining('Opening Wide (3)'), findsOneWidget);
+    });
+
+    testWidgets(
+        'reloads preset names when the camera list changes while the tab stays mounted',
+        (tester) async {
+      final service = Service(
+        id: 's1',
+        name: 'Mass',
+        steps: [
+          const ServiceStep(
+              id: 'st1',
+              type: StepType.shot,
+              cameraIp: '10.0.1.10',
+              cameraPresetIndex: 3),
+        ],
+      );
+
+      await tester
+          .pumpWidget(_wrap(_tab(services: [service], cameras: const [])));
+      await tester.tap(find.byType(DropdownButton<String?>));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Mass').last);
+      await tester.pumpAndSettle();
+
+      // No matching camera configured yet -> warning state.
+      expect(find.textContaining('Shot (not set)'), findsOneWidget);
+
+      // Simulate Settings -> Connections adding the camera this shot step
+      // already references, with a name already saved for its preset.
+      final cam = PanasonicCameraConfig(name: 'Cam 1', ipAddress: '10.0.1.10');
+      addTearDown(cam.dispose);
+      await PresetNameStore.save('10.0.1.10', 3, 'Cantor');
+      await tester
+          .pumpWidget(_wrap(_tab(services: [service], cameras: [cam])));
+      await tester.pumpAndSettle();
+
+      expect(find.textContaining('Cantor (4)'), findsOneWidget);
     });
   });
 }

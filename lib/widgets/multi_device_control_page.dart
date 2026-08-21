@@ -541,6 +541,7 @@ class _MultiDeviceControlPageState extends State<MultiDeviceControlPage> {
                     heightRanges: _heightRanges,
                     rolandService: _rolandService,
                     rolandConnected: _rolandConnected,
+                    rolandIpController: _rolandIpController,
                     onResponse: (_) {},
                   ),
                   OperatorPanel(

@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart' show setEquals;
 import 'package:flutter/material.dart';
 import '../models/height_range.dart';
 import '../models/panasonic_camera_config.dart';
@@ -5,6 +6,8 @@ import '../models/person.dart';
 import '../models/position.dart';
 import '../models/service.dart';
 import '../services/abstract/roland_service_abstract.dart';
+import '../services/preset_name_store.dart';
+import '../utils/label_utils.dart';
 import '../utils/preset_resolver.dart';
 
 class _FlatStep {
@@ -35,6 +38,7 @@ class ServiceTab extends StatefulWidget {
   final List<HeightRange> heightRanges;
   final RolandServiceAbstract? rolandService;
   final ValueNotifier<bool>? rolandConnected;
+  final TextEditingController? rolandIpController;
   final ValueChanged<String> onResponse;
 
   const ServiceTab({
@@ -47,6 +51,7 @@ class ServiceTab extends StatefulWidget {
     required this.rolandService,
     required this.rolandConnected,
     required this.onResponse,
+    this.rolandIpController,
   });
 
   @override
@@ -59,6 +64,57 @@ class _ServiceTabState extends State<ServiceTab> {
 
   // participantId → personId, set at run time for this service
   final Map<String, String?> _participantAssignments = {};
+
+  Map<int, String> _rolandNames = {};
+  Map<String, Map<int, String>> _cameraNames = {};
+
+  String? _lastRolandKey;
+  Set<String>? _lastCameraIps;
+
+  @override
+  void initState() {
+    super.initState();
+    _lastRolandKey = _rolandKey;
+    _lastCameraIps = _cameraIps;
+    _loadNames();
+  }
+
+  String get _rolandKey => 'roland_${widget.rolandIpController?.text ?? ''}';
+
+  Set<String> get _cameraIps =>
+      widget.cameras.map((c) => c.ipController.text).toSet();
+
+  Future<void> _loadNames() async {
+    final cameraIps = widget.cameras.map((c) => c.ipController.text).toList();
+    final results = await Future.wait([
+      PresetNameStore.loadAll(_rolandKey),
+      ...cameraIps.map(PresetNameStore.loadAll),
+    ]);
+    final roland = results.first;
+    final cameraNames = <String, Map<int, String>>{
+      for (var i = 0; i < cameraIps.length; i++) cameraIps[i]: results[i + 1],
+    };
+    if (mounted) {
+      setState(() {
+        _rolandNames = roland;
+        _cameraNames = cameraNames;
+      });
+    }
+  }
+
+  /// "name (N)" for macro [macroNumber] if a custom name is saved, otherwise
+  /// just "Macro N".
+  String _macroLabel(int macroNumber) => formatItemLabel(
+      _rolandNames[macroNumber], '$macroNumber',
+      fallback: 'Macro $macroNumber');
+
+  /// "name (N)" for [presetIndex] (0-based) on [cameraIp] if a custom name is
+  /// saved, otherwise just "Preset N" (1-based).
+  String _presetLabel(String cameraIp, int presetIndex) {
+    final n = presetIndex + 1;
+    return formatItemLabel(_cameraNames[cameraIp]?[presetIndex], '$n',
+        fallback: 'Preset $n');
+  }
 
   Service? get _selectedService => _selectedServiceId == null
       ? null
@@ -110,6 +166,18 @@ class _ServiceTabState extends State<ServiceTab> {
       _selectedServiceId = null;
       _currentStepIndex = null;
       _participantAssignments.clear();
+    }
+
+    // The parent loads the Roland IP and camera list asynchronously and can
+    // change them at any time (e.g. Settings -> Connections) while this tab
+    // stays mounted; reload names whenever the effective config actually
+    // changes rather than only once in initState.
+    final key = _rolandKey;
+    final ips = _cameraIps;
+    if (key != _lastRolandKey || !setEquals(ips, _lastCameraIps)) {
+      _lastRolandKey = key;
+      _lastCameraIps = ips;
+      _loadNames();
     }
   }
 
@@ -204,7 +272,7 @@ class _ServiceTabState extends State<ServiceTab> {
     }
     try {
       await widget.rolandService!.executeMacro(s.macroNumber!);
-      widget.onResponse('Macro ${s.macroNumber} executed');
+      widget.onResponse('${_macroLabel(s.macroNumber!)} executed');
     } catch (e) {
       widget.onResponse('Macro error: $e');
     }
@@ -229,7 +297,7 @@ class _ServiceTabState extends State<ServiceTab> {
     try {
       final response = await camera.service!.recallPreset(s.cameraPresetIndex!);
       widget.onResponse(
-          '${camera.name} → Preset ${s.cameraPresetIndex! + 1}: $response');
+          '${camera.name} → ${_presetLabel(s.cameraIp!, s.cameraPresetIndex!)}: $response');
     } catch (e) {
       widget.onResponse('Error: $e');
     }
@@ -492,7 +560,7 @@ class _ServiceTabState extends State<ServiceTab> {
       case StepType.macro:
         typeIcon = Icons.settings_remote;
         title += s.macroNumber != null
-            ? 'Macro ${s.macroNumber}'
+            ? _macroLabel(s.macroNumber!)
             : 'Macro (not set)';
         if (s.macroNumber == null) hasWarning = true;
 
@@ -507,7 +575,8 @@ class _ServiceTabState extends State<ServiceTab> {
           title += 'Shot (not set)';
           hasWarning = true;
         } else {
-          title += '${camera.name}  ·  Preset ${s.cameraPresetIndex! + 1}';
+          title +=
+              '${camera.name}  ·  ${_presetLabel(s.cameraIp!, s.cameraPresetIndex!)}';
         }
 
       case StepType.block:
