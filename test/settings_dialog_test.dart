@@ -1,8 +1,14 @@
+import 'dart:convert';
+import 'dart:io';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:navigation_app/models/height_range.dart';
+import 'package:navigation_app/models/operator_profile.dart';
+import 'package:navigation_app/services/backup/config_mutation_notifier.dart';
 import 'package:navigation_app/services/height_range_store.dart';
+import 'package:navigation_app/services/operator_store.dart';
 import 'package:navigation_app/utils/height_utils.dart';
 import 'package:navigation_app/widgets/settings_dialog.dart';
 
@@ -10,6 +16,7 @@ Widget _settingsDialog({
   List<HeightRange> heightRanges = const [],
   VoidCallback? onHeightRangesChanged,
   VoidCallback? onPeopleChanged,
+  ValueChanged<String>? onResponse,
 }) {
   return MaterialApp(
     theme: ThemeData(useMaterial3: false),
@@ -28,7 +35,7 @@ Widget _settingsDialog({
             onConnectRoland: () async {},
             panasonicCameras: const [],
             onConnectPanasonic: (_) async {},
-            onResponse: (_) {},
+            onResponse: onResponse ?? (_) {},
             positions: const [],
             heightRanges: heightRanges,
             onPositionsChanged: () {},
@@ -118,5 +125,59 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.text('Add Person'), findsOneWidget);
+  });
+
+  testWidgets('import commits the active-operator reset as pending work',
+      (tester) async {
+    late final Directory tempDir;
+    late final File configFile;
+    await tester.runAsync(() async {
+      tempDir = await Directory.systemTemp.createTemp('nav-import-test-');
+      configFile = File('${tempDir.path}/config.json');
+      await configFile.writeAsString(jsonEncode({
+        'schemaVersion': 1,
+        'positions': <dynamic>[],
+        'people': <dynamic>[],
+        'services': <dynamic>[],
+        'heightRanges': <dynamic>[],
+      }));
+    });
+    addTearDown(() => tempDir.delete(recursive: true));
+    await OperatorStore.saveActiveId('operator-who-will-not-exist');
+    final seen = <int>[];
+    final sub = ConfigMutationNotifier.instance.onMutated.listen(seen.add);
+    addTearDown(sub.cancel);
+    String? response;
+
+    await tester.pumpWidget(
+      _settingsDialog(onResponse: (value) => response = value),
+    );
+    await tester.tap(find.text('Open'));
+    await tester.pumpAndSettle();
+    await tester.ensureVisible(find.text('Import Configuration'));
+    await tester.tap(find.text('Import Configuration'));
+    await tester.pump(const Duration(milliseconds: 300));
+    await tester.enterText(find.byType(TextField), configFile.path);
+    await tester.tap(find.text('Load'));
+    await tester.pumpAndSettle();
+    for (var attempt = 0;
+        attempt < 20 && find.text('Replace all').evaluate().isEmpty;
+        attempt++) {
+      await tester.runAsync(
+        () => Future<void>.delayed(const Duration(milliseconds: 10)),
+      );
+      await tester.pump(const Duration(milliseconds: 10));
+    }
+    expect(find.text('Replace all'), findsOneWidget);
+    await tester.tap(find.text('Replace all'));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 300));
+
+    expect(response, 'Configuration imported successfully');
+    expect(await OperatorStore.loadActiveId(), OperatorProfile.defaultId);
+    expect(seen, [2],
+        reason: 'the prior operator edit was generation 1; import is one edit');
+    expect(await ConfigMutationNotifier.instance.isDirty(), isTrue,
+        reason: 'manual import must remain pending across app termination');
   });
 }

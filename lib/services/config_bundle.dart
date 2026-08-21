@@ -9,6 +9,10 @@ import '../models/operator_profile.dart';
 import '../models/person.dart';
 import '../models/position.dart';
 import '../models/service.dart';
+import 'backup/app_fault.dart';
+import 'backup/backup_pointer.dart';
+import 'backup/config_mutation_notifier.dart';
+import 'backup/restore_journal.dart';
 import 'device_config_store.dart';
 import 'height_range_store.dart';
 import 'operator_store.dart';
@@ -17,6 +21,11 @@ import 'position_store.dart';
 import 'service_store.dart';
 
 class ConfigBundle {
+  /// Schema version of the source document.
+  final int schemaVersion;
+
+  static const int currentSchemaVersion = 1;
+
   final List<Position> positions;
   final List<Person> people;
   final List<Service> services;
@@ -38,6 +47,7 @@ class ConfigBundle {
   final List<OperatorProfile>? operators;
 
   const ConfigBundle({
+    required this.schemaVersion,
     required this.positions,
     required this.people,
     required this.services,
@@ -50,12 +60,13 @@ class ConfigBundle {
   });
 
   Map<String, dynamic> toJson() => {
+        'schemaVersion': currentSchemaVersion,
         'positions': positions.map((p) => p.toJson()).toList(),
         'people': people.map((p) => p.toJson()).toList(),
         'services': services.map((s) => s.toJson()).toList(),
         'heightRanges': heightRanges.map((r) => r.toJson()).toList(),
-        if (presetNames.isNotEmpty) 'presetNames': presetNames,
-        if (visibilities.isNotEmpty) 'visibilities': visibilities,
+        'presetNames': presetNames,
+        'visibilities': visibilities,
         if (rolandIp != null) 'rolandIp': rolandIp,
         if (cameras != null)
           'cameras': cameras!.map((c) => c.toJson()).toList(),
@@ -63,41 +74,92 @@ class ConfigBundle {
           'operators': operators!.map((o) => o.toJson()).toList(),
       };
 
-  factory ConfigBundle.fromJson(Map<String, dynamic> json) => ConfigBundle(
-        positions: (json['positions'] as List<dynamic>? ?? [])
-            .map((p) => Position.fromJson(p as Map<String, dynamic>))
-            .toList(),
-        people: (json['people'] as List<dynamic>? ?? [])
-            .map((p) => Person.fromJson(p as Map<String, dynamic>))
-            .toList(),
-        services: (json['services'] as List<dynamic>? ?? [])
-            .map((s) => Service.fromJson(s as Map<String, dynamic>))
-            .toList(),
-        heightRanges: (json['heightRanges'] as List<dynamic>? ?? [])
-            .map((r) => HeightRange.fromJson(r as Map<String, dynamic>))
-            .toList(),
-        presetNames: _parseStringStringMaps(json['presetNames']),
-        visibilities: _parseStringStringMaps(json['visibilities']),
-        rolandIp: json['rolandIp'] as String?,
-        cameras: (json['cameras'] as List<dynamic>?)
-            ?.map((c) => CameraEntry.fromJson(c as Map<String, dynamic>))
-            .toList(),
-        operators: (json['operators'] as List<dynamic>?)
-            ?.map((o) => OperatorProfile.fromJson(o as Map<String, dynamic>))
-            .toList(),
-      );
+  /// The only parser. Throws [AppFault] rather than silently producing an
+  /// empty bundle: applying an all-empty bundle replaces four stores with
+  /// nothing, so a truncated document must be a fault, not a destructive
+  /// restore.
+  factory ConfigBundle.fromJsonValidated(Map<String, dynamic> json) {
+    Never bad(String why) =>
+        throw AppFault.backup(BackupFailureKind.malformedRemote, why);
 
-  static Map<String, Map<String, String>> _parseStringStringMaps(dynamic raw) {
-    if (raw is! Map<String, dynamic>) return {};
-    return raw.map((deviceKey, inner) {
-      if (inner is! Map<String, dynamic>) {
-        return MapEntry(deviceKey, <String, String>{});
+    final version = json['schemaVersion'];
+    if (version is! int) bad('schemaVersion is missing or not an integer');
+    if (version > currentSchemaVersion) {
+      throw AppFault.backup(
+          BackupFailureKind.unsupportedSchema,
+          'This backup was written by a newer version of the app '
+          '(schema $version, this build understands $currentSchemaVersion). '
+          'Update the app to sync.');
+    }
+    if (version != currentSchemaVersion) {
+      bad('schemaVersion $version is not a schema this app has ever written');
+    }
+
+    List<Map<String, dynamic>> requireObjectList(String field) {
+      final raw = json[field];
+      if (raw is! List) bad('required field "$field" is missing or not a list');
+      return raw.map((e) {
+        if (e is! Map<String, dynamic>) bad('"$field" contains a non-object');
+        return e;
+      }).toList();
+    }
+
+    Map<String, Map<String, String>> optionalStringMaps(String field) {
+      final raw = json[field];
+      if (raw == null) return const {};
+      if (raw is! Map) bad('"$field" is present but not a map');
+      final out = <String, Map<String, String>>{};
+      raw.forEach((k, v) {
+        if (v is! Map) bad('"$field.$k" is not a map');
+        final inner = <String, String>{};
+        v.forEach((ik, iv) {
+          if (iv is! String) bad('"$field.$k.$ik" is not a string');
+          inner['$ik'] = iv;
+        });
+        out['$k'] = inner;
+      });
+      return out;
+    }
+
+    T guard<T>(String field, T Function() parse) {
+      try {
+        return parse();
+      } on AppFault {
+        rethrow;
+      } catch (e) {
+        throw AppFault.backup(
+            BackupFailureKind.malformedRemote, 'could not parse "$field": $e',
+            cause: e);
       }
-      return MapEntry(
-        deviceKey,
-        inner.map((k, v) => MapEntry(k, v as String)),
-      );
-    });
+    }
+
+    return ConfigBundle(
+      schemaVersion: version,
+      positions: guard('positions',
+          () => requireObjectList('positions').map(Position.fromJson).toList()),
+      people: guard('people',
+          () => requireObjectList('people').map(Person.fromJson).toList()),
+      services: guard('services',
+          () => requireObjectList('services').map(Service.fromJson).toList()),
+      heightRanges: guard(
+          'heightRanges',
+          () => requireObjectList('heightRanges')
+              .map(HeightRange.fromJson)
+              .toList()),
+      presetNames: optionalStringMaps('presetNames'),
+      visibilities: optionalStringMaps('visibilities'),
+      rolandIp: guard('rolandIp', () => json['rolandIp'] as String?),
+      cameras: guard(
+          'cameras',
+          () => (json['cameras'] as List<dynamic>?)
+              ?.map((c) => CameraEntry.fromJson(c as Map<String, dynamic>))
+              .toList()),
+      operators: guard(
+          'operators',
+          () => (json['operators'] as List<dynamic>?)
+              ?.map((o) => OperatorProfile.fromJson(o as Map<String, dynamic>))
+              .toList()),
+    );
   }
 
   static const _presetPrefix = 'preset_names_';
@@ -140,6 +202,7 @@ class ConfigBundle {
     final operators = await OperatorStore.loadAll();
 
     return ConfigBundle(
+      schemaVersion: currentSchemaVersion,
       positions: results[0] as List<Position>,
       people: results[1] as List<Person>,
       services: results[2] as List<Service>,
@@ -152,29 +215,120 @@ class ConfigBundle {
     );
   }
 
-  Future<void> saveToStores() async {
-    final prefs = await SharedPreferences.getInstance();
+  /// Applies this bundle to the live stores, atomically.
+  ///
+  /// Either every journalled key ends up matching this bundle, or none of
+  /// them change. [failAfterWritesForTest] throws after N writes to prove the
+  /// rollback works; every write increments the counter, so a failure can be
+  /// injected at any materialization step.
+  Future<void> applyTransactionally({
+    int? failAfterWritesForTest,
+    bool markAsPending = true,
+  }) =>
+      ConfigMutationNotifier.instance.runExclusive(() => _applyTransactionally(
+          failAfterWritesForTest: failAfterWritesForTest,
+          markAsPending: markAsPending));
 
-    await Future.wait([
-      PositionStore.saveAll(positions),
-      PeopleStore.saveAll(people),
-      ServiceStore.saveAll(services),
-      HeightRangeStore.saveAll(heightRanges),
-      if (rolandIp != null || cameras != null)
-        DeviceConfigStore.save(
+  Future<void> _applyTransactionally({
+    int? failAfterWritesForTest,
+    required bool markAsPending,
+  }) async {
+    var written = 0;
+    void tick() {
+      written++;
+      if (failAfterWritesForTest != null && written >= failAfterWritesForTest) {
+        throw _InjectedRestoreFailure(written);
+      }
+    }
+
+    try {
+      await RestoreJournal.capture();
+      await ConfigMutationNotifier.instance.suspendWhile(() async {
+        final prefs = await SharedPreferences.getInstance();
+
+        await PositionStore.saveAll(positions);
+        tick();
+        await PeopleStore.saveAll(people);
+        tick();
+        await ServiceStore.saveAll(services);
+        tick();
+        await HeightRangeStore.saveAll(heightRanges);
+        tick();
+
+        // Absent means reset to defaults, not "leave the machine alone".
+        await DeviceConfigStore.save(
           rolandIp ?? DeviceConfigStore.defaultRolandIp,
           cameras ?? DeviceConfigStore.defaultCameras,
-        ),
-      if (operators != null) OperatorStore.saveAll(operators!),
-    ]);
+        );
+        tick();
+        await OperatorStore.saveAll(
+            operators ?? const [OperatorProfile.defaultProfile]);
+        tick();
+        await OperatorStore.saveActiveId(OperatorProfile.defaultId);
+        tick();
 
-    for (final entry in presetNames.entries) {
-      await prefs.setString(
-          '$_presetPrefix${entry.key}', jsonEncode(entry.value));
+        // Authoritative: any device key the bundle does not mention is
+        // deleted. This is the correction to today's behaviour, where the
+        // loops only setString keys that are present and never remove others.
+        await _replacePrefixed(prefs, _presetPrefix, presetNames, tick);
+        await _replacePrefixed(prefs, _visibilityPrefix, visibilities, tick);
+      });
+
+      // Imported state is unprovenanced pending work. The engine
+      // re-establishes provenance itself after applying a fetched revision.
+      await BackupPointer.clear();
+      if (markAsPending) {
+        // Manual import is a new local snapshot, not a fetched restore. Record
+        // one durable generation while the journal can still roll it back.
+        await ConfigMutationNotifier.instance.notify();
+      }
+      await RestoreJournal.clear();
+    } catch (error, stackTrace) {
+      try {
+        await RestoreJournal.rollbackIfPresent();
+      } catch (rollbackError) {
+        throw AppFault.backup(
+          BackupFailureKind.storageWriteFailed,
+          'The import failed and its rollback could not be persisted. '
+          'The recovery journal was retained.',
+          cause: rollbackError,
+        );
+      }
+
+      if (error is StateError && error is! _InjectedRestoreFailure) {
+        throw AppFault.backup(
+          BackupFailureKind.storageWriteFailed,
+          'Could not persist the imported configuration.',
+          cause: error,
+        );
+      }
+      Error.throwWithStackTrace(error, stackTrace);
     }
-    for (final entry in visibilities.entries) {
-      await prefs.setString(
-          '$_visibilityPrefix${entry.key}', jsonEncode(entry.value));
+  }
+
+  static Future<void> _replacePrefixed(
+    SharedPreferences prefs,
+    String prefix,
+    Map<String, Map<String, String>> incoming,
+    void Function() tick,
+  ) async {
+    for (final k
+        in prefs.getKeys().where((k) => k.startsWith(prefix)).toList()) {
+      if (!incoming.containsKey(k.substring(prefix.length))) {
+        if (!await prefs.remove(k)) {
+          await prefs.reload();
+          throw StateError('Could not remove $k');
+        }
+        tick();
+      }
+    }
+    for (final entry in incoming.entries) {
+      if (!await prefs.setString(
+          '$prefix${entry.key}', jsonEncode(entry.value))) {
+        await prefs.reload();
+        throw StateError('Could not persist $prefix${entry.key}');
+      }
+      tick();
     }
   }
 
@@ -210,10 +364,23 @@ class ConfigBundle {
       throw UnsupportedError('File import is not supported on web');
     }
     final content = await File(path).readAsString();
-    final json = jsonDecode(content);
-    if (json is! Map<String, dynamic>) {
-      throw const FormatException('Not a valid configuration file');
+    final dynamic json;
+    try {
+      json = jsonDecode(content);
+    } on FormatException catch (e) {
+      throw AppFault.backup(BackupFailureKind.malformedRemote,
+          'could not decode configuration file: $e',
+          cause: e);
     }
-    return ConfigBundle.fromJson(json);
+    if (json is! Map<String, dynamic>) {
+      throw AppFault.backup(BackupFailureKind.malformedRemote,
+          'configuration file root must be an object');
+    }
+    return ConfigBundle.fromJsonValidated(json);
   }
+}
+
+class _InjectedRestoreFailure extends StateError {
+  _InjectedRestoreFailure(int written)
+      : super('injected failure after $written writes');
 }
