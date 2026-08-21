@@ -16,6 +16,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:integration_test/integration_test.dart';
 import 'package:navigation_app/main.dart' as app;
+import 'package:navigation_app/services/backup/single_instance.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 /// Logical point sizes, portrait. Landscape is derived by flipping.
@@ -58,6 +59,7 @@ void main() {
             ]),
           });
         });
+        tearDown(SingleInstance.releaseForTest);
 
         for (final tile in dialogs.keys) {
           testWidgets('$tile lays out without overflow', (tester) async {

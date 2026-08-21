@@ -24,6 +24,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:integration_test/integration_test.dart';
 import 'package:navigation_app/main.dart' as app;
+import 'package:navigation_app/services/backup/single_instance.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 const rolandHost = '127.0.0.1';
@@ -43,6 +44,7 @@ Future<void> main() async {
 
   group('app shell', () {
     setUp(() => SharedPreferences.setMockInitialValues({}));
+    tearDown(SingleInstance.releaseForTest);
 
     testWidgets('starts disconnected and in Live mode', (tester) async {
       _useLargeWindow(tester);
