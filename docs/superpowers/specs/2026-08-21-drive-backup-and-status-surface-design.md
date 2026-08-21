@@ -40,12 +40,13 @@ Out:
 
 - Real-time collaborative editing. Concurrent edits are detected and surfaced,
   never merged.
-- Per-user attribution. One shared account means Drive's actor identity is
-  useless, and a free-form device label is not an audit trail. If person-level
-  auditability is ever needed, that requires separate Google identities.
+- Per-user attribution. One shared Google account means Drive's actor identity
+  is useless, and with a single production machine there is nothing to
+  attribute. If person-level auditability is ever needed, that requires
+  separate Google identities.
 - Encrypting the bundle at rest. It holds names and LAN addresses.
 - **Drive on Linux or Windows.** `google_sign_in` has no Linux support, the
-  production machines are the Mac mini and the iPad, and John develops against
+  production machine is the Mac mini, and John develops against
   `MockBackupTarget`. A second OAuth path for desktop Linux was avoidable scope
   and has been cut.
 - **Any automatic local file target.** See [One target only](#one-target-only).
@@ -207,9 +208,12 @@ class BackupRevision {
   final String contentHash;        // sha256 of the canonical JSON body
   final String? parentRevisionId;  // the revision this was edited from
   final int sizeBytes;
-  final String deviceLabel;
 }
 ```
+
+The app enforces **singleton launch**: a second instance must be refused at
+startup. Two copies sharing `SharedPreferences` through its cached legacy API
+would otherwise read stale values and race the journal.
 
 `parentRevisionId` is the piece the first draft missed. Keeping provenance out
 of the hashed *body* is correct — it would change the hash on every upload and
@@ -722,16 +726,12 @@ stayed hidden.
 
 ## Open questions
 
-1. **Device label** — a settings field the operator fills in once. Not an audit
-   trail; see Scope.
-2. **Does the status surface absorb device faults later?** The three known
+1. **Does the status surface absorb device faults later?** The three known
    silent failures — socket drop still reading Live, permanent ACK desync,
    wedged camera — are worse than any backup fault because they happen during a
    service. If they are ever moving here, `BackupFailure` should become a
    subtype of a broader `AppFault` **before** the log format is fixed.
-3. **Multiple macOS instances.** Two copies of the app share
-   `SharedPreferences` through a cached legacy API. Either prevent a second
-   instance or define reload semantics.
+2. *(resolved — see Decisions taken after round 2.)*
 
 ## Review history
 
@@ -799,8 +799,15 @@ citing the transactionality gap. The stricter verdict was taken.
 
 ### Decisions taken after round 2
 
-Daniel, 21 Aug 2026: the Mac mini **does** have internet at church alongside the
-Roland Ethernet, confirming assumption 1 and removing the store-and-forward
-contingency. And **Drive is the only backup target** — the local file target is
-cut, which also retires the sandbox question that was blocking phase 2. See
-[One target only](#one-target-only).
+Daniel, 21 Aug 2026:
+
+- The Mac mini **does** have internet at church alongside the Roland Ethernet,
+  confirming assumption 1 and removing the store-and-forward contingency.
+- **Drive is the only backup target.** The local file target is cut, which also
+  retires the sandbox question that was blocking phase 2. See
+  [One target only](#one-target-only).
+- **There is one production machine**, so `deviceLabel` is dropped from
+  `BackupRevision`. Nothing needs to distinguish which machine wrote a revision.
+- **The app is a singleton.** A second instance must be prevented from starting
+  rather than tolerated, which removes the cached-`SharedPreferences` staleness
+  hazard rather than requiring reload semantics for it.
