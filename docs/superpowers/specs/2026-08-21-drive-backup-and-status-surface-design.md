@@ -439,8 +439,9 @@ copy, and the window is days wide.
 
 The resolution UI must show **which device, when, and a compact summary of what
 differs**. Three unlabelled buttons are not a decision anyone can make. The
-device name comes from `BackupRevision.deviceLabel`, set once per machine in
-settings and defaulting to the OS hostname so it is never blank.
+device name comes from `BackupRevision.deviceLabel` — see
+[Naming a machine](#naming-a-machine), which is not as simple as reading the
+hostname.
 
 - **Use the remote copy** — snapshot local first, then apply transactionally.
 - **Keep my copy as a new revision** — uploads with the remote head as parent.
@@ -540,6 +541,42 @@ class AppFault {
 
 Only `FaultDomain.backup` is implemented in phases 1-4. The other two domains
 exist as enum values and nothing more until phase 5.
+
+## Naming a machine
+
+`deviceLabel` is stored in `SharedPreferences` under `backup_device_label` and
+is editable in settings. Getting its **default** right matters more than it
+looks, because a bad default is worse than none: it looks like a real answer.
+
+**There is no reliable automatic device name on iPad.** Both routes are closed:
+
+| Source | macOS | iPadOS |
+|---|---|---|
+| `Platform.localHostname` (`utsname.nodename`) | the machine name | **`"localhost"`** since iOS 17 — Apple documents this as valid |
+| `UIDevice.current.name` | n/a | generic **`"iPad"`** since iOS 16, unless granted `com.apple.developer.device-information.user-assigned-device-name`, which Apple gates behind an approval process |
+
+So "default to the hostname" works on the Mac mini and fails on every iPad,
+which is precisely the machine most likely to be the *other* party in a
+conflict. Two iPads would both label themselves `localhost` and the conflict
+prompt would be actively misleading.
+
+The rule:
+
+1. Compute a candidate — `Platform.localHostname` on macOS and Linux; nothing on
+   iOS.
+2. **Reject the candidate** if it is empty, `localhost`, a bare device model
+   (`iPad`, `iPhone`), or already carried by a *different* recent revision in
+   the store. The last clause also catches two Macs sharing a hostname.
+3. If the candidate survives, use it as a pre-filled, editable default.
+4. If it does not, **require the operator to name the machine before the first
+   push.** One text field, once per machine, blocking only that machine's first
+   backup and nothing else.
+
+Never silently accept a rejected candidate. An unlabelled machine is honest; a
+machine labelled `localhost` is a lie the conflict UI will repeat back.
+
+Do not pursue the Apple entitlement. It needs justification and approval for
+what is a convenience field, and asking the operator once is free.
 
 ## Failure taxonomy
 
@@ -728,6 +765,9 @@ bundle identity, and the keychain entitlements.
   A journal present at startup triggers rollback before anything else runs.
 - **Log tests** — fingerprint collapsing; all three bounds; the active condition
   survives eviction.
+- **Device-label tests** — `localhost`, `iPad`, empty, and a name already used
+  by another recent revision are each rejected as defaults and force the naming
+  prompt; a good macOS hostname is accepted.
 - **Widget tests** — all five pill states; tappable in each; header pins;
   timestamp ladder boundaries; width cap with a pathological message.
 - **Integration** — edit config, observe a revision appear in
