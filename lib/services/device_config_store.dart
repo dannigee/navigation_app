@@ -1,5 +1,6 @@
 import 'dart:convert';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'backup/config_mutation_notifier.dart';
 
 class CameraEntry {
   final String name;
@@ -43,5 +44,6 @@ class DeviceConfigStore {
       prefs.setString(
           _camerasKey, jsonEncode(cameras.map((c) => c.toJson()).toList())),
     ]);
+    await ConfigMutationNotifier.instance.notify();
   }
 }

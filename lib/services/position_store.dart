@@ -1,5 +1,6 @@
 import 'dart:convert';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'backup/config_mutation_notifier.dart';
 import '../models/position.dart';
 
 class PositionStore {
@@ -19,5 +20,6 @@ class PositionStore {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString(
         _key, jsonEncode(positions.map((p) => p.toJson()).toList()));
+    await ConfigMutationNotifier.instance.notify();
   }
 }

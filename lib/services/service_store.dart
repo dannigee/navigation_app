@@ -1,5 +1,6 @@
 import 'dart:convert';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'backup/config_mutation_notifier.dart';
 import '../models/service.dart';
 
 class ServiceStore {
@@ -19,5 +20,6 @@ class ServiceStore {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString(
         _key, jsonEncode(services.map((s) => s.toJson()).toList()));
+    await ConfigMutationNotifier.instance.notify();
   }
 }

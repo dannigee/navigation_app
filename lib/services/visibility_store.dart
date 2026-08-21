@@ -1,5 +1,6 @@
 import 'dart:convert';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'backup/config_mutation_notifier.dart';
 
 /// Where a macro/preset button should appear. Not yet consumed anywhere —
 /// the pages that filter on this live elsewhere.
@@ -29,5 +30,6 @@ class VisibilityStore {
     existing[itemIndex] = visibility;
     await prefs.setString(_key(deviceKey),
         jsonEncode(existing.map((k, v) => MapEntry('$k', v.name))));
+    await ConfigMutationNotifier.instance.notify();
   }
 }

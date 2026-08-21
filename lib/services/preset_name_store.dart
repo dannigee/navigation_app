@@ -1,5 +1,6 @@
 import 'dart:convert';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'backup/config_mutation_notifier.dart';
 
 /// Stores preset names locally, keyed by camera IP and 0-based preset index.
 class PresetNameStore {
@@ -26,5 +27,6 @@ class PresetNameStore {
     }
     await prefs.setString(
         _key(cameraIp), jsonEncode(existing.map((k, v) => MapEntry('$k', v))));
+    await ConfigMutationNotifier.instance.notify();
   }
 }

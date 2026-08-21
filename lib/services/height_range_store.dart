@@ -1,5 +1,6 @@
 import 'dart:convert';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'backup/config_mutation_notifier.dart';
 import '../models/height_range.dart';
 
 class HeightRangeStore {
@@ -19,5 +20,6 @@ class HeightRangeStore {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString(
         _key, jsonEncode(ranges.map((r) => r.toJson()).toList()));
+    await ConfigMutationNotifier.instance.notify();
   }
 }

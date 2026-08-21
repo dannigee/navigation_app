@@ -1,5 +1,6 @@
 import 'dart:convert';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'backup/config_mutation_notifier.dart';
 import '../models/operator_profile.dart';
 
 class OperatorStore {
@@ -28,6 +29,7 @@ class OperatorStore {
       _operatorsKey,
       jsonEncode(profiles.map((p) => p.toJson()).toList()),
     );
+    await ConfigMutationNotifier.instance.notify();
   }
 
   static Future<String> loadActiveId() async {
@@ -38,5 +40,6 @@ class OperatorStore {
   static Future<void> saveActiveId(String id) async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString(_activeIdKey, id);
+    await ConfigMutationNotifier.instance.notify();
   }
 }
