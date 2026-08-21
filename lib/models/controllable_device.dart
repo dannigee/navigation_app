@@ -1,6 +1,7 @@
 import 'package:flutter/foundation.dart';
 import '../services/preset_name_store.dart';
 import '../services/visibility_store.dart';
+import 'service.dart';
 
 /// Base class for a controllable device (Roland V-160HD macros, Panasonic presets, etc.).
 ///
@@ -44,6 +45,10 @@ abstract class ControllableDevice {
   /// Executes the action for [index]. Returns a human-readable success message
   /// or throws [DeviceException] on failure.
   Future<String> execute(int index);
+
+  /// Describes the action that firing [index] performs, as a [ServiceStep].
+  /// Used to record a live sequence of actions into a reusable [Service].
+  ServiceStep toServiceStep(int index);
 
   // ── Shared name/visibility persistence ────────────────────────────────────
 

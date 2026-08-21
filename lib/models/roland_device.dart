@@ -1,6 +1,7 @@
 import 'package:flutter/foundation.dart';
 import '../services/abstract/roland_service_abstract.dart';
 import 'controllable_device.dart';
+import 'service.dart';
 
 /// [ControllableDevice] implementation for Roland V-160HD macros (1–100).
 class RolandDevice extends ControllableDevice {
@@ -56,4 +57,11 @@ class RolandDevice extends ControllableDevice {
       throw DeviceException('Error executing macro: $e');
     }
   }
+
+  @override
+  ServiceStep toServiceStep(int index) => ServiceStep(
+        id: generateServiceId(),
+        type: StepType.macro,
+        macroNumber: index,
+      );
 }

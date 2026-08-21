@@ -546,6 +546,7 @@ class _MultiDeviceControlPageState extends State<MultiDeviceControlPage> {
                     rolandIpController: _rolandIpController,
                     cameras: _panasonicCameras,
                     onResponse: (_) {},
+                    onServicesChanged: _loadServices,
                   ),
                   PositionsTab(
                     cameras: _panasonicCameras,
