@@ -40,10 +40,11 @@ Out:
 
 - Real-time collaborative editing. Concurrent edits are detected and surfaced,
   never merged.
-- Per-user attribution. One shared Google account means Drive's actor identity
-  is useless, and with a single production machine there is nothing to
-  attribute. If person-level auditability is ever needed, that requires
-  separate Google identities.
+- **Per-*user* attribution.** One shared Google account means Drive's own actor
+  identity is useless. `deviceLabel` names the *machine*, which is what the
+  conflict UI needs, but it is self-declared and trivially wrong if someone
+  mislabels a machine. It is a usability aid, not an audit trail. Real
+  person-level auditability would require separate Google identities.
 - Encrypting the bundle at rest. It holds names and LAN addresses.
 - **Drive on Linux or Windows.** `google_sign_in` has no Linux support, the
   production machine is the Mac mini, and John develops against
@@ -212,6 +213,7 @@ class BackupRevision {
   final String contentHash;        // sha256 of the canonical JSON body
   final String? parentRevisionId;  // the revision this was edited from
   final int sizeBytes;
+  final String deviceLabel;        // "Mac mini", "Daniel's iPad"
 }
 ```
 
@@ -436,7 +438,9 @@ The realistic case is not two people clicking at once — it is a stale local
 copy, and the window is days wide.
 
 The resolution UI must show **which device, when, and a compact summary of what
-differs**. Three unlabelled buttons are not a decision anyone can make.
+differs**. Three unlabelled buttons are not a decision anyone can make. The
+device name comes from `BackupRevision.deviceLabel`, set once per machine in
+settings and defaulting to the OS hostname so it is never blank.
 
 - **Use the remote copy** — snapshot local first, then apply transactionally.
 - **Keep my copy as a new revision** — uploads with the remote head as parent.
@@ -866,8 +870,11 @@ Daniel, 21 Aug 2026:
 - **Drive is the only backup target.** The local file target is cut, which also
   retires the sandbox question that was blocking phase 2. See
   [One target only](#one-target-only).
-- **There is one production machine**, so `deviceLabel` is dropped from
-  `BackupRevision`. Nothing needs to distinguish which machine wrote a revision.
+- **One machine runs production, but several write configs.** So the conflict
+  machinery is guarding something real, and `deviceLabel` is **kept** — a
+  conflict prompt that cannot say whose change it is asks the operator to choose
+  blind. (Briefly cut earlier on an incomplete reading of "one production
+  machine"; reinstated once Daniel clarified that several machines edit.)
 - **The app is a singleton.** A second instance must be prevented from starting
   rather than tolerated, which removes the cached-`SharedPreferences` staleness
   hazard rather than requiring reload semantics for it.
