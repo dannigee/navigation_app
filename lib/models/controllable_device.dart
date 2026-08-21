@@ -35,6 +35,18 @@ abstract class ControllableDevice {
   /// Defaults to [defaultLabel]; override for richer descriptions (e.g. 'Preset 5').
   String describe(int index) => defaultLabel(index);
 
+  /// Bare number shown in parentheses alongside a custom name -- e.g. "13"
+  /// for Roland macro 13, "4" for Panasonic preset index 3 (1-based).
+  String numberSuffix(int index);
+
+  /// Display label for [index]: "name (N)" when [name] is a non-empty custom
+  /// name, otherwise just [defaultLabel]. The bare number stays visible next
+  /// to a custom name so a renamed item can still be identified by number.
+  String labelFor(int index, String? name) =>
+      (name == null || name.isEmpty)
+          ? defaultLabel(index)
+          : '$name (${numberSuffix(index)})';
+
   /// Message shown when [itemIndices] is empty and [isLoadingItems] is false.
   String get emptyMessage => 'No items available';
 

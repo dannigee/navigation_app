@@ -159,6 +159,26 @@ void main() {
     expect((await PresetNameStore.loadAll('roland_'))[1], 'Opening Wide');
   });
 
+  testWidgets('a named grid button shows "name (number)"', (tester) async {
+    await PresetNameStore.save('roland_', 1, 'Opening Wide');
+    await tester.pumpWidget(_build());
+    await tester.pumpAndSettle();
+
+    expect(find.text('Opening Wide (1)'), findsOneWidget);
+    expect(find.text('Opening Wide'), findsNothing);
+  });
+
+  testWidgets(
+      'the Rename caption shows "name (number)" once a name is saved',
+      (tester) async {
+    await PresetNameStore.save('roland_', 1, 'Opening Wide');
+    await tester.pumpWidget(_build());
+    await tester.pumpAndSettle();
+    await _selectMacro(tester, 'Opening Wide (1)');
+
+    expect(find.text('— Opening Wide (1)'), findsOneWidget);
+  });
+
   group('race conditions between an in-flight save and a switch', () {
     testWidgets(
         'a rename still saving when the device is switched updates the '

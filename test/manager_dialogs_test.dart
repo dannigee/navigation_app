@@ -390,7 +390,7 @@ void main() {
       await tester.tap(find.byType(DropdownButton<int?>));
       await tester.pumpAndSettle();
 
-      expect(find.text('Wide Shot'), findsOneWidget);
+      expect(find.text('Wide Shot (5)'), findsOneWidget);
       expect(find.text('5'), findsNothing);
     });
 
@@ -416,7 +416,7 @@ void main() {
 
       await tester.tap(find.byType(DropdownButton<int?>));
       await tester.pumpAndSettle();
-      await tester.tap(find.text('Wide Shot').last);
+      await tester.tap(find.text('Wide Shot (5)').last);
       await tester.pumpAndSettle();
       await tester.tap(find.text('Save'));
       await tester.pumpAndSettle();
@@ -654,6 +654,38 @@ void main() {
       await tester.pumpAndSettle();
 
       expect(find.textContaining('Defaults to preset 5 via height range'),
+          findsOneWidget);
+    });
+
+    testWidgets(
+        'editor shows the preset name in the hint when one is saved',
+        (tester) async {
+      final cam = PanasonicCameraConfig(name: 'Cam', ipAddress: '10.0.1.10');
+      addTearDown(cam.dispose);
+      await PresetNameStore.save('10.0.1.10', 4, 'Cantor');
+      await PeopleStore.saveAll([
+        Person(id: 'p1', name: 'Alice', heightCm: 160),
+      ]);
+      final shortRange = HeightRange(
+        id: 'hr1',
+        maxHeightCm: 165,
+        positionPresets: {
+          'pos1': {'10.0.1.10': 4},
+        },
+      );
+
+      await _open(
+          tester,
+          (_) => PeopleManagerDialog(
+                positions: [Position(id: 'pos1', name: 'Lectern')],
+                cameras: [cam],
+                heightRanges: [shortRange],
+                onSaved: () {},
+              ));
+      await tester.tap(find.byIcon(Icons.edit));
+      await tester.pumpAndSettle();
+
+      expect(find.textContaining('Defaults to Cantor (5) via height range'),
           findsOneWidget);
     });
 
@@ -905,6 +937,135 @@ void main() {
 
       final saved = await ServiceStore.loadAll();
       expect(saved.single.steps.single.cameraIp, '10.0.1.10');
+    });
+
+    testWidgets('a macro step has a Macro # dropdown, not a text field',
+        (tester) async {
+      await _open(
+          tester,
+          (_) => ServiceManagerDialog(
+              positions: const [], cameras: const [], onSaved: () {}));
+      await tester.tap(find.text('Add Service'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Add Step'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Macro'));
+      await tester.pumpAndSettle();
+
+      expect(find.widgetWithText(TextField, 'Macro #'), findsNothing);
+      expect(find.byType(DropdownButton<int?>), findsOneWidget);
+    });
+
+    testWidgets('a named macro shows "name (number)" in the dropdown',
+        (tester) async {
+      await PresetNameStore.save('roland_', 7, 'Entrance');
+
+      await _open(
+          tester,
+          (_) => ServiceManagerDialog(
+              positions: const [], cameras: const [], onSaved: () {}));
+      await tester.tap(find.text('Add Service'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Add Step'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Macro'));
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.byType(DropdownButton<int?>));
+      await tester.pumpAndSettle();
+
+      expect(find.text('Entrance (7)'), findsOneWidget);
+    });
+
+    testWidgets('selecting a macro number persists it on save',
+        (tester) async {
+      await _open(
+          tester,
+          (_) => ServiceManagerDialog(
+              positions: const [], cameras: const [], onSaved: () {}));
+      await tester.tap(find.text('Add Service'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Add Step'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Macro'));
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.byType(DropdownButton<int?>));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('7').last);
+      await tester.pumpAndSettle();
+
+      await tester.enterText(find.byType(TextField).first, 'Mass');
+      await tester.tap(find.text('Save'));
+      await tester.pumpAndSettle();
+
+      final saved = await ServiceStore.loadAll();
+      expect(saved.single.steps.single.macroNumber, 7);
+    });
+
+    testWidgets(
+        'a shot step\'s preset dropdown shows "name (number)" for a named preset',
+        (tester) async {
+      final cam = PanasonicCameraConfig(name: 'Cam 1', ipAddress: '10.0.1.10');
+      addTearDown(cam.dispose);
+      await PresetNameStore.save('10.0.1.10', 3, 'Cantor');
+
+      await _open(
+          tester,
+          (_) => ServiceManagerDialog(
+              positions: const [], cameras: [cam], onSaved: () {}));
+      await tester.tap(find.text('Add Service'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Add Step'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Shot'));
+      await tester.pumpAndSettle();
+
+      // Camera dropdown, then the Preset # dropdown.
+      await tester.tap(find.byType(DropdownButton<String?>));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Cam 1').last);
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.byType(DropdownButton<int?>));
+      await tester.pumpAndSettle();
+
+      expect(find.text('Cantor (4)'), findsOneWidget);
+    });
+
+    testWidgets(
+        'selecting a preset on a shot step persists the 0-based index on save',
+        (tester) async {
+      final cam = PanasonicCameraConfig(name: 'Cam 1', ipAddress: '10.0.1.10');
+      addTearDown(cam.dispose);
+
+      await _open(
+          tester,
+          (_) => ServiceManagerDialog(
+              positions: const [], cameras: [cam], onSaved: () {}));
+      await tester.tap(find.text('Add Service'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Add Step'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Shot'));
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.byType(DropdownButton<String?>));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Cam 1').last);
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.byType(DropdownButton<int?>));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('4').last);
+      await tester.pumpAndSettle();
+
+      await tester.enterText(find.byType(TextField).first, 'Mass');
+      await tester.tap(find.text('Save'));
+      await tester.pumpAndSettle();
+
+      final saved = await ServiceStore.loadAll();
+      expect(saved.single.steps.single.cameraPresetIndex, 3);
     });
 
     testWidgets('can add and remove a participant inline', (tester) async {

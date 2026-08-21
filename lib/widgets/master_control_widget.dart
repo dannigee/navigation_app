@@ -216,13 +216,24 @@ class _MasterControlWidgetState extends State<MasterControlWidget> {
     if (mounted) setState(() => _visibilityByDevice[deviceIndex] = stored);
   }
 
+  /// The "Rename — X" caption text for the current selection: "name (N)"
+  /// once a custom name is saved, otherwise the device's own description
+  /// (e.g. "Preset 4") -- unlike grid buttons, this caption has room to be
+  /// descriptive rather than compact.
+  String? _captionLabel(ControllableDevice device, Map<int, String> names) {
+    final i = _selectedItemIndex;
+    if (i == null) return null;
+    final custom = names[i];
+    return (custom == null || custom.isEmpty)
+        ? device.describe(i)
+        : '$custom (${device.numberSuffix(i)})';
+  }
+
   @override
   Widget build(BuildContext context) {
     final device = _devices[_selectedDeviceIndex];
     final names = _namesByDevice[_selectedDeviceIndex] ?? {};
-    final selectedLabel = _selectedItemIndex != null
-        ? (names[_selectedItemIndex] ?? device.describe(_selectedItemIndex!))
-        : null;
+    final selectedLabel = _captionLabel(device, names);
 
     return Card(
       margin: const EdgeInsets.all(8.0),
@@ -369,7 +380,7 @@ class _MasterControlWidgetState extends State<MasterControlWidget> {
       mainAxisSpacing: 4,
       crossAxisSpacing: 4,
       children: indices.map((index) {
-        final label = names[index] ?? device.defaultLabel(index);
+        final label = device.labelFor(index, names[index]);
         final isSelected = _selectedItemIndex == index;
         return FilledButton(
           style: FilledButton.styleFrom(
