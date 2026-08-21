@@ -1,6 +1,7 @@
 # Google Drive backup and the status surface
 
-Design, 21 Aug 2026.
+Design, 21 Aug 2026. Revised after adversarial review by `gpt-5.6-sol` (high)
+and Antigravity; see [Review history](#review-history).
 
 ## Problem
 
@@ -18,8 +19,9 @@ it there fails.
 Two people share one dedicated Google account for the project, so Drive is the
 store. The second half of this design matters more than the first: this app's
 established failure mode is going quiet. A dropped switcher socket still reads
-**Live**; a wedged camera reports nothing at all. A backup that fails silently
-would be the same bug in a new place.
+**Live** (`multi_device_control_page.dart:294-325` routes every device response
+into `onResponse: (_) {}`); a wedged camera reports nothing at all. A backup
+that failed silently would be the same bug in a new place.
 
 ## Scope
 
@@ -27,463 +29,602 @@ In:
 
 - An immutable, append-only revision store on Google Drive.
 - A `BackupTarget` interface with Drive, local-directory and mock implementations.
-- Pull on open, debounced push on change, periodic sweep, retry with backoff.
-- Conflict detection between two machines editing the same config.
+- A defined sync protocol: what pull does, what push does, and how the local
+  provenance pointer moves.
+- An explicit import contract, because the current one is neither a full
+  replace nor atomic.
 - An always-visible status pill in the AppBar and a clickable error-log popover.
 
 Out:
 
-- Real-time collaborative editing. Two people editing simultaneously is
-  detected and surfaced, not merged.
-- Per-user attribution. One shared account means Drive revision history cannot
-  distinguish Daniel from John; a device label in file metadata is as close as
-  this gets.
-- Encrypting the bundle at rest. It holds names and LAN addresses, nothing
-  secret.
-- Migrating existing manual export/import away. That path stays exactly as it
-  is, and becomes the local implementation of the new interface.
+- Real-time collaborative editing. Concurrent edits are detected and surfaced,
+  never merged.
+- Per-user attribution. One shared account means Drive's actor identity is
+  useless, and a free-form device label is not an audit trail. If person-level
+  auditability is ever needed, that requires separate Google identities.
+- Encrypting the bundle at rest. It holds names and LAN addresses.
+- **Drive on Linux or Windows.** Assumption 3 says nobody needs it; specifying
+  a second OAuth path for it was avoidable scope and has been cut.
 
 ## Assumptions
 
-Three questions were open when this was written. Each is called out again at
-the point it affects the design.
-
 1. **The Mac mini has internet while driving the Roland.** `HANDOFF.md`
    describes its Ethernet going to the Roland's isolated switch at
-   `10.0.1.100`. This design assumes a second live path — building WiFi — so
-   sync can run during a service. If that is wrong, see
+   `10.0.1.100`. This design assumes a second live path. If that is wrong, see
    [If there is no internet at church](#if-there-is-no-internet-at-church).
-2. **The status surface is Drive-only for now.** It is designed so device
-   connection faults can move into it later without rework, but this spec ships
-   backup states only.
-3. **John does not need Drive working on Linux.** He runs the app on the Mac
-   mini at church; Linux is his development machine and gets the local
-   implementation. See [Authentication](#authentication).
+2. **The status surface is backup-only for now**, shaped so device faults can
+   move into it later.
+3. **John does not need Drive on Linux.** He runs the app on the Mac mini;
+   Linux is his development machine and gets the local target.
+
+## What the existing code actually does
+
+The first version of this spec asserted that `ConfigBundle.saveToStores()` is a
+full replace and built everything on top of that. **It is not**, and the
+correction changes the design rather than just the prose.
+
+`saveToStores()` (`config_bundle.dart:155-179`) does three different things:
+
+| Data | Behaviour on import |
+|---|---|
+| positions, people, services, heightRanges | **Full replace.** Each `saveAll` writes one complete JSON list. |
+| `preset_names_*`, `item_visibility_*` | **Merge.** The loops only `setString` keys present in the bundle. A device key absent from the bundle is never deleted. |
+| rolandIp, cameras, operators | **Skipped entirely** when the bundle's nullable field is absent. |
+
+Two consequences the design must handle:
+
+- **The restore is not transactional.** It is a series of independent
+  `SharedPreferences` writes. A failure partway leaves a hybrid of old and new
+  configuration, and the next backup can upload that hybrid as a valid revision.
+- **The existing test does not catch this.** `'saveToStores overwrites previous
+  store contents'` (`test/config_bundle_test.dart:240-253`) asserts only on
+  positions, people and services. It blesses the incomplete replace.
+
+Separately, `ConfigBundle.fromJson({})` produces an empty-everything bundle and
+a test asserts that it should (`test/config_bundle_test.dart:110-118`). So a
+truncated or incompatible JSON object is currently a *valid destructive
+restore* of the four list stores.
+
+The motivation for this project survives all of that: a stale machine pushing a
+snapshot still silently reverts the other machine's positions, people, services
+and height ranges. Only the stated contract was wrong.
+
+### The import contract, decided
+
+Bundle-owned keys are **fully replaced**. On import, any `preset_names_*` or
+`item_visibility_*` key not present in the incoming bundle is **deleted**.
+
+`ConfigBundle` must distinguish "field absent because this is a legacy file" from
+"field present and deliberately empty". A `schemaVersion` in the envelope (see
+[Schema](#schema-and-validation)) makes that decidable: at version 1 and above,
+absent means empty and is applied; below it, absent means unknown and is
+preserved.
+
+Import becomes transactional by staging: validate the whole bundle, write it to
+a single canonical snapshot key, then materialize the individual stores, and
+only then advance the provenance pointer. A failure mid-materialization is
+recoverable because the previous canonical snapshot is still there.
 
 ## Architecture
-
-Three layers, following the `abstract/` + `mock/` + concrete split the repo
-already uses for `RolandService` and `PanasonicService`.
 
 ```
 lib/services/backup/
 ├── abstract/backup_target_abstract.dart   the interface
 ├── drive_backup_target.dart               googleapis drive/v3
-├── local_file_backup_target.dart          a directory; Linux, and manual export
+├── local_file_backup_target.dart          a directory; Linux dev, and manual export
 ├── mock/mock_backup_target.dart           in-memory, for tests
-├── backup_revision.dart                   revision metadata
+├── backup_revision.dart                   revision metadata, incl. ancestry
 ├── backup_failure.dart                    the failure taxonomy
-├── backup_log.dart                        the 14-day log, persisted
-└── backup_service.dart                    the engine: triggers, hash, retry
+├── backup_log.dart                        the bounded log
+├── config_mutation_notifier.dart          the change source (see below)
+└── backup_service.dart                    the engine: single-flight, protocol, status
 ```
 
-`BackupService` is the only thing the UI talks to. It owns scheduling, hashing,
-retry and conflict detection, and it is the sole writer of status. Swapping
-Drive for something else means writing one `BackupTarget`; nothing above it
-changes.
+`BackupService` is the only thing the UI talks to, and **every operation runs
+through one single-flight queue inside it**. Pulls, debounced pushes, periodic
+sweeps, manual retries and the backoff timer are otherwise five independent
+callers of the same mutable state; without serialization an older operation can
+complete after a newer one and overwrite status or provenance.
 
 ### The interface
 
 ```dart
 abstract class BackupTargetAbstract {
   /// Uploads a new immutable revision. Never overwrites an existing one.
-  Future<BackupRevision> put(String json, {required String contentHash});
+  /// Must fail rather than replace if the generated id already exists.
+  Future<BackupRevision> put(
+    String json, {
+    required String contentHash,
+    required String? parentRevisionId,
+  });
 
   /// Newest revision's metadata, or null when the store is empty.
-  /// Must not download the body.
+  /// Must not download the body. Ordering rules are defined per target.
   Future<BackupRevision?> latest();
 
   /// Revisions, newest first.
   Future<List<BackupRevision>> list({int limit = 50});
 
-  /// Downloads and returns the raw JSON for a revision.
+  /// Downloads a revision and verifies the body against a trusted checksum.
   Future<String> fetch(BackupRevision revision);
+
+  /// Revisions sharing a parent with [revision] — a fork check.
+  Future<List<BackupRevision>> siblings(BackupRevision revision);
 
   /// Deletes revisions outside the retention policy.
   Future<void> prune({required int keepCount, required Duration keepFor});
-
-  /// Cheap credential and reachability probe. No body transfer.
-  Future<void> ping();
 }
 ```
 
-`put` takes serialized JSON rather than a `ConfigBundle` so that hashing,
-serialization and transport each have one owner. Everything throws
-`BackupFailure` (below) and nothing else; implementations translate their own
-exceptions at the boundary.
+`put` takes serialized JSON so that hashing, serialization and transport each
+have one owner. Everything throws `BackupFailure` and nothing else.
 
-`latest()` returning metadata without a download is what makes the periodic
-sweep cheap enough to run every ten minutes.
+There is no `ping()`. The previous draft had one and then argued three sections
+later that no liveness probe was needed, because the pull already is one.
 
 ### Revision metadata
 
 ```dart
 class BackupRevision {
-  final String id;           // Drive file id, or absolute path locally
-  final String filename;     // nav_config_20260821-143205.json
-  final DateTime createdAt;  // UTC
-  final String contentHash;  // sha256 of the JSON body
+  final String id;                 // Drive file id; locally, a UUID
+  final String filename;
+  final DateTime createdAt;        // SERVER time on Drive; see below
+  final String contentHash;        // sha256 of the canonical JSON body
+  final String? parentRevisionId;  // the revision this was edited from
   final int sizeBytes;
-  final String deviceLabel;  // "Mac mini (church)", "Daniel's iPad"
+  final String deviceLabel;
 }
 ```
 
-On Drive, `contentHash`, `deviceLabel` and a `schemaVersion` live in the file's
-`appProperties`, so `latest()` is one metadata query. Locally they are parsed
-from the filename plus a sidecar, or recomputed on read.
+`parentRevisionId` is the piece the first draft missed. Keeping provenance out
+of the hashed *body* is correct — it would change the hash on every upload and
+defeat the guard — but that was wrongly taken as a reason to omit ancestry from
+the *metadata* too. Ancestry in metadata costs nothing and is what makes fork
+detection possible.
 
-## Data model
+## Canonical serialization
 
-### File naming
+**The bundle must be serialized with recursively sorted keys before hashing or
+uploading.**
 
-`nav_config_<YYYYMMDD>-<HHMMSS>.json`, UTC.
+`presetNames` and `visibilities` are `Map<String, Map<String, String>>` built by
+iterating `prefs.getKeys()` (`config_bundle.dart:114-140`), which returns a
+`Set` with no guaranteed order, and `jsonEncode` preserves insertion order. Two
+machines holding *identical configuration* can therefore produce different JSON
+bytes, different hashes, and consequently redundant uploads on every sweep plus
+spurious conflicts against each other.
 
-`suggestedExportPath()` (`config_bundle.dart:182-186`) currently stamps to the
-day only, so a second save on any given day collides with the first. Append-only
-cannot tolerate that — widen it to seconds before anything is built on top.
-The existing manual-export UI picks up the improvement for free.
+The hash guard is load-bearing for the entire design. Without canonical
+serialization it does not work at all. Use `SplayTreeMap` recursively, or an
+RFC 8785 implementation.
 
-### The revision pointer is not in the bundle
+## Schema and validation
 
-Local state records which revision it was loaded from, in `SharedPreferences`
-under `backup_source_revision`. It is deliberately **not** a field on
-`ConfigBundle`.
+`schemaVersion` lives in the **JSON envelope**, not only in Drive
+`appProperties`. A downloaded file, an emailed manual export, or a local file
+without its sidecar must be self-describing. It changes only when the schema
+changes, so it does not defeat content hashing.
 
-If the pointer lived in the uploaded JSON, every upload would change the
-document, which would change its hash, which would defeat the hash guard that
-stops redundant uploads. Hash the data; track provenance beside it.
+Before any store write:
 
-`ConfigBundle.toJson()` therefore needs no new fields, and existing exported
-files stay readable.
+- **Reject** a bundle whose `schemaVersion` is greater than this build
+  supports, as `BackupFailureKind.unsupportedSchema` — "App update required to
+  sync". Never pull it, and never push over it. Without this, an older machine
+  pulls a newer revision, silently drops the fields it does not understand, and
+  pushes back a downgraded snapshot that permanently destroys them.
+- **Validate** required fields and semantic invariants. `{}` must become
+  `malformedRemote`, not an empty bundle that wipes four stores. The existing
+  test at `test/config_bundle_test.dart:110-118` encodes the old behaviour and
+  must be changed along with the code.
 
-## The sync engine
+## The sync protocol
+
+### Pull
+
+The previous draft said "Pull" in four places and never defined it, which is
+exactly where local work gets destroyed. It is now explicit:
+
+1. Fetch `latest()` metadata only. Verify the target identity matches.
+2. If remote is empty → nothing to do.
+3. Compute the local canonical hash.
+4. If `remoteHash == localHash` → the two agree. **Rebase the pointer to the
+   remote revision id** and stop. This transition is required: without it, a
+   machine whose content matches a differently-identified remote revision
+   raises a meaningless conflict forever.
+5. If `latest().id == pointer` → remote has not moved; local is ahead or equal.
+   Nothing to apply.
+6. If `latest().id != pointer` **and local is clean** (local hash equals the
+   hash recorded for the pointer) → fetch, validate, snapshot the current local
+   bundle, apply transactionally, advance the pointer.
+7. If `latest().id != pointer` **and local is dirty** → **do not apply, do not
+   show a modal.** Record an unresolved-conflict condition, surface it on the
+   pill, and let the operator choose when to resolve. A blocking dialog during a
+   live service is unacceptable.
+
+Step 7 is the correction to the biggest hazard in the first draft: either
+reading of an undefined "Pull" was bad — one silently erased a Saturday's
+planning, the other interrupted a Sunday service.
+
+### Push
+
+1. If the canonical hash equals the hash of the current head → no-op. No file,
+   no request, no log entry.
+2. If `latest().id != pointer` → conflict; prompt (see below); do not upload.
+3. Otherwise `put(json, parentRevisionId: pointer)`.
+4. **After the upload, re-read `latest()` and call `siblings()`.** If another
+   revision shares our parent, a fork happened between check and write.
+
+Step 4 exists because `latest()`-then-`put()` is a time-of-check/time-of-use
+race and Drive's `files.create` offers no compare-and-swap. Two machines
+starting from the same revision can both pass step 2 and both upload. Append-only
+means neither body is destroyed, but without a fork check neither machine is
+ever told. **This design does not promise pre-upload conflict detection**; it
+promises detection, honestly, immediately after the fact.
+
+### Pointer transitions
+
+`backup_source_revision` — and the hash recorded alongside it — move on exactly
+these events, and no others:
+
+| Event | Pointer becomes |
+|---|---|
+| Push succeeds | the id returned by `put` |
+| Pull applies a revision (transactionally, fully) | that revision's id |
+| Pull finds remote hash equals local hash | remote's id (rebase) |
+| Manual import from a file | null, with the imported hash recorded |
+| First adoption of a non-empty remote | the adopted revision's id |
+| Account, folder or target identity changes | null; local becomes unprovenanced |
+| Push fails, pull fails, or restore fails partway | **unchanged** |
+
+The pointer is stored with the target identity. A pointer from a different Drive
+folder or account is meaningless and must not be compared.
+
+**First run with a non-empty remote and non-empty local state is a question, not
+a default.** Ask which snapshot to adopt. Silently pushing local up can destroy
+the other machine's work; silently pulling down can destroy this one's.
 
 ### Triggers
 
 | Trigger | Action |
 |---|---|
 | App start | Pull |
-| Unbackground | Pull |
+| Unbackground | Pull, then resume any durable pending push |
 | Periodic sweep, every 10 min while foregrounded | Pull, then hash-guarded push |
-| Local data changed | Push, debounced 30 s after edits stop |
-| Background or quit | Flush any pending debounce |
-| User taps "Retry" in the popover | Immediate push |
+| Bundle-owned data mutated | Push, debounced 30 s |
+| Background or quit | Best-effort flush; correctness does not depend on it |
+| User taps Retry in the popover | Immediate |
 
-The pull is what keeps credentials honest. It is an unconditional round trip
-that does not care whether local data changed, so an expired token surfaces the
-next time anyone opens the app or the next sweep — whichever comes first. No
-separate liveness probe is needed.
+The pull is an unconditional round trip, so an expired credential surfaces on
+the next app open or sweep. No separate liveness probe is needed.
 
-Ten minutes for the sweep matches the ceiling of the retry backoff below, so
-there is one cadence to reason about rather than two that drift apart.
+### The change source
 
-### The hash guard
+The trigger table says "data mutated", and **nothing in the codebase can
+currently tell us that.** All eight stores are static classes over
+`SharedPreferences` with no `Stream`, `ChangeNotifier` or event bus, and writes
+are scattered across many widgets — including `ControllableDevice`
+(`lib/models/controllable_device.dart:48-60`) and `MasterControlWidget`
+(`lib/widgets/master_control_widget.dart:140-159`), which has no data-changed
+callback at all.
 
-Before any upload, serialize the bundle and hash it. If the hash equals
-`latest()?.contentHash`, do nothing — no file, no request body, no log entry.
+The first draft claimed the hash guard made a missed mutation path safe. That
+is backwards: **a hash guard suppresses a redundant write after a trigger; it
+cannot manufacture a trigger that never fired.** A mutation nobody reports is
+simply never backed up until something else happens to fire.
 
-This is what makes the trigger list safe to be generous with. Fire the check as
-often as convenient; it costs one comparison when nothing has changed. Without
-it, every trigger would have to be reasoned about individually, and a missed
-mutation path would fail silently.
+So phase 1 introduces `ConfigMutationNotifier`, and every bundle-owned write
+goes through it. This is a real refactor of eight stores and their call sites,
+and it is a prerequisite, not a detail.
 
-### Debounce
+### Durability of pending work
 
-Reordering a service with eight drag-drops must produce one revision, not
-eight. Thirty seconds of quiet after the last mutation, flushed early on
-background or quit. A pending debounce lost to app termination is the edit the
-user most recently made and most cares about.
+An in-memory debounce timer, retry count and next-attempt time vanish when iOS
+suspends or kills the app. **Pending intent must be persisted at the moment of
+mutation**, not held only in RAM: record the dirty hash durably when the change
+happens, and resume from it on next start or foreground.
 
-### Retention
-
-A revision is deleted only when it is **both** outside the newest 50 **and**
-older than 90 days. Either condition alone is not enough. The conjunction errs
-toward keeping too much, which is the right direction for a backup: a busy
-fortnight cannot age out a revision that is still one of the newest, and a quiet
-year cannot leave a single stale file as the only thing standing between you and
-an empty Drive folder.
-
-Pruning rides on successful upload, so there is no separate schedule to
-maintain and it can never run when the store is unreachable.
+Lifecycle flush on background is then an optimization rather than the thing
+correctness rests on. This is the only workable answer on iPad, where
+backgrounding suspends Dart within seconds and an in-flight HTTPS upload is
+killed mid-request.
 
 ## Conflict handling
 
-Detected at upload, prompted, never resolved automatically.
+Surfaced on the pill, resolved when the operator chooses, never automatically
+and never modally mid-service.
 
-Before pushing, compare `latest().id` against `backup_source_revision`. If they
-differ, another machine has written since this one last synced, and pushing
-would replace their work wholesale — `ConfigBundle.saveToStores()` is a full
-replace, not a merge, so the loser's changes vanish without a trace.
+The realistic case is not two people clicking at once — it is a stale local
+copy, and the window is days wide.
 
-The realistic case is not two people clicking at once. It is a stale local copy,
-and the window is days wide: config is planned on one machine on a Saturday and
-the other machine still holds last week's state on Sunday morning.
+The resolution UI must show **which device, when, and a compact summary of what
+differs**. Three unlabelled buttons are not a decision anyone can make.
 
-On conflict, stop and ask:
+- **Use the remote copy** — snapshot local first, then apply transactionally.
+- **Keep my copy as a new revision** — uploads with the remote head as parent.
+  Named for what it does: append-only means this adds, it does not destroy.
+- **Decide later** — **suppresses prompting for that specific remote revision
+  id** until the operator reopens it from the popover. Without the suppression,
+  the next sweep ten minutes later re-raises the same prompt during the service.
 
-- **Reload theirs** — discard local changes, pull the newer revision.
-- **Overwrite** — push anyway. Safe by construction: the other revision is
-  still in Drive, because nothing is ever overwritten.
-- **Cancel** — leave both alone, keep the pill red, keep the entry pinned.
+"Recoverable" is only true if recovery is operable. Either ship a minimal
+revision-history picker that can preview and restore an older revision, or drop
+the recoverability claim and document the manual Drive procedure. This design
+takes the first option, in phase 3.
 
-Append-only is what makes "Overwrite" a recoverable choice rather than a
-destructive one.
+## Drive specifics
+
+- **Folder identity.** A named folder is not an identity: Drive names are not
+  unique and two first runs can create two. Create once, persist the folder id
+  alongside the pointer, and handle "folder deleted or not found" as a distinct
+  condition that invalidates the pointer.
+- **`latest()` ordering.** Query explicitly with `trashed = false`, `orderBy`
+  server `createdTime desc`, defined pagination, and a deterministic tie-break
+  on file id. List order is otherwise arbitrary. **Never order by the
+  client-generated filename** — one machine with a wrong clock would then pick
+  the wrong head and corrupt retention.
+- **Trust the body, not the metadata.** `contentHash` in `appProperties` is
+  client-supplied; a file edited by hand in the Drive web UI keeps stale
+  metadata. `fetch` verifies the downloaded bytes against Drive's own checksum
+  field and against the recomputed hash, and reports `malformedRemote` on
+  disagreement.
+- **Scope** is `drive.file` against a visible folder, not `drive.appdata`, so
+  the backups can be seen and recovered by hand.
+
+## The local target
+
+Second-resolution filenames are **not** sufficient for append-only. Two
+instances, two clicks in one second, or a retry all collide.
+
+- Revision ids are collision-proof: timestamp plus a UUID suffix.
+- Writes are atomic: create exclusively into a temp file in the same directory,
+  flush, rename into place, then verify by re-reading and re-hashing.
+- Metadata lives in the JSON envelope. The first draft's separate sidecar file
+  added a second partial-write boundary for no benefit.
+- `latest()` **quarantines** an unparseable or partial file, logs it loudly, and
+  falls back to the next valid revision rather than treating corruption as head.
+
+### The sandbox problem
+
+The Mac app is sandboxed (`macos/Runner/*.entitlements`) with **no
+user-selected-file entitlement**. `Platform.environment['HOME']` resolves inside
+the app container, so today's `$HOME/Documents` export
+(`config_bundle.dart:181-205`) and the type-a-path import
+(`settings_dialog.dart:215-248`) do not mean what they appear to mean.
+
+A decision is required before phase 1 is called shippable:
+
+- **App-private** — write into the application-support container, and state
+  plainly that it is not an operator-visible backup; or
+- **User-selected** — add a directory picker, the read-write entitlement, and a
+  persistent security-scoped bookmark so access survives a restart, with an
+  iOS equivalent defined.
 
 ## Failure taxonomy
 
-Classification is not cosmetic. It decides whether the app can fix itself.
-
 ```dart
 enum BackupFailureKind {
-  offline,           // no route to host, DNS failure
-  authExpired,       // token invalid or revoked
-  permissionDenied,  // account lacks access to the folder
-  quotaExceeded,     // Drive storage or API rate limit
-  conflict,          // remote is newer than our source revision
-  serverError,       // 5xx
-  malformedRemote,   // downloaded JSON will not parse
+  offline,
+  authExpired,
+  permissionDenied,
+  rateLimited,        // temporary; honour Retry-After
+  storageFull,        // Drive quota; waiting does NOT fix this
+  conflict,
+  unsupportedSchema,
+  malformedRemote,
+  targetMissing,      // folder deleted, account changed
   unknown,
 }
 ```
 
-```dart
-class BackupFailure implements Exception {
-  final BackupFailureKind kind;
-  final String message;        // human-readable, shown in the popover
-  final Object? cause;         // original exception, for logs
-  bool get isRetryable;
-  bool get needsUserAction;
-}
-```
+`rateLimited` and `storageFull` were one `quotaExceeded` in the first draft.
+Only one of them is repaired by waiting.
 
-| Kind | Retryable | Needs a human | Behaviour |
-|---|---|---|---|
-| `offline` | yes | no | Back off and keep trying. |
-| `serverError` | yes | no | Back off and keep trying. |
-| `quotaExceeded` | yes | no | Back off; honour `Retry-After` when present. |
-| `authExpired` | no | yes | Stop automatic retries. Popover offers "Sign in again". Retry on foreground or user tap only. |
-| `permissionDenied` | no | yes | Same, with a different message. |
-| `conflict` | no | yes | Not an error so much as a question. Prompt as above. |
-| `malformedRemote` | no | yes | Do not overwrite. Surface which revision failed to parse. |
-| `unknown` | yes | no | Treated as retryable, logged with the original exception. |
+| Kind | Automatic retry |
+|---|---|
+| `offline`, `rateLimited` | Backoff 30 s → 1 m → 2 m → 5 m → 10 m, hold at 10 m, never give up. |
+| `unknown` | Retry on the 10-minute sweep only. A tight loop around a permanent programmer error burns battery forever. |
+| `authExpired`, `permissionDenied`, `storageFull`, `unsupportedSchema`, `targetMissing`, `malformedRemote` | None. Waiting cannot fix these. Retry on foreground or user action, and offer the action that can. |
+| `conflict` | None. It is a question, not a failure. |
 
-### Retry policy
-
-Retryable failures back off 30 s → 1 m → 2 m → 5 m → 10 m, then hold at 10 m
-indefinitely. **The loop never gives up.** A retry schedule that exhausts itself
-and stops is a silent failure with extra steps.
-
-Non-retryable failures schedule nothing. Waiting cannot fix a revoked token, and
-hammering only fills the log. They retry when the app is foregrounded or when
-the user asks.
+One persisted scheduler owns the backoff and the sweep. Backoff resets only on
+success of the operation that failed.
 
 ## The status surface
 
-### States
+### Three facts, not one
 
-Colour is derived from the most recent attempt only. Nothing in the popover can
-change it.
+Colour cannot come from "the most recent attempt", because pull and push are
+both attempts. That rule produces this: a push of new edits fails, the pill goes
+red, the app is foregrounded, its pull succeeds — and the pill goes green while
+the edits are still not backed up anywhere.
 
-| State | Colour | Pill reads | Meaning |
-|---|---|---|---|
-| `never` | grey | "Not backed up" | No successful backup, or not signed in. |
-| `ok` | green | "Backed up 2h ago" | Most recent attempt succeeded. |
-| `failing` | red | "Backup failed" | Most recent attempt failed. |
+The engine therefore tracks three independent things:
 
-Green carries the age rather than a bare tick. An age is self-evident and cannot
-be dismissed into silence; a green dot only ever means "nothing broke recently".
+1. **Durable head** — the last revision whose content is known to exist at the
+   target, and its hash.
+2. **Dirty** — whether the local canonical hash differs from the durable head.
+3. **Active condition** — the unresolved operation-specific state, if any.
 
-`never` is a real third state. Nothing has failed, so red is a lie; nothing is
-protected, so green is a worse one.
+| State | Colour | Pill reads |
+|---|---|---|
+| No successful backup ever, or signed out | grey | "Not backed up" |
+| Durable head equals local hash | green | "Backed up 2h ago" |
+| Dirty, no failure | amber | "3 changes pending" |
+| Unresolved conflict | amber | "Needs review" |
+| Active failure | red | operation-specific, e.g. "Upload failing" |
+
+**Green means the current local state is known to exist durably at the target** —
+not merely that something recently succeeded. A pull success never clears a
+failed push, a conflict, or dirty state; a condition clears only when that same
+condition resolves.
+
+Amber also covers the offline-queue case if assumption 1 turns out wrong, which
+is why the state model already has room for it.
 
 ### The pill
 
-Lives in `AppBar.title` on `multi_device_control_page.dart:463`. That slot is
-empty — `9ec4c33` removed the title — and `title:` left-aligns by default when
-unset. `leading:` is the wrong slot: it is 56 px wide and would need
-`leadingWidth` fighting to fit text.
+`AppBar.title` on `multi_device_control_page.dart:463` — the slot is empty since
+`9ec4c33` removed the title.
 
-No collision above or beside it. The macOS traffic lights are in the window
-chrome, not the Flutter AppBar, and the debug banner is upper-right.
+Set `centerTitle: false` explicitly. It happens to left-align today because
+`_getEffectiveCenterTitle` (`app_bar.dart:805-816`) returns
+`actions.length < 2` on macOS/iOS and this AppBar has four entries — but that
+is an accident of the current action count, and dropping to one would silently
+centre it.
 
-Visually a sibling of the existing Live/Demo chip (`:479-497`): a `Container`
-with `BorderRadius.circular(12)`, `shade100` fill, `shade800` bold 12 px label,
-wrapped in an `InkWell`. Reusing the idiom keeps it reading as part of the app
-rather than bolted on.
+Visually a sibling of the Live/Demo chip (`:479-497`): `BorderRadius.circular(12)`,
+`shade100` fill, `shade800` bold 12 px label, in an `InkWell`.
 
 **Always clickable, in every state**, including green. The popover is the log,
 and the log is useful when things are working.
 
 ### The popover
 
-Fixed header, outside the scroll area so it cannot scroll away:
-
-- "Last backup: 2 hours ago", or "Never backed up".
-- An action button when the current condition needs one — "Sign in again",
-  "Retry now", "Resolve conflict".
+Fixed header, outside the scroll area: last successful backup as a relative age,
+pending-change count, and the action for the active condition if there is one.
 
 Then a scrollable list, newest first:
 
-- The **active condition is pinned at the top and has no dismiss control.**
-  It persists until an attempt succeeds. This is the whole point: dismissal
-  must never be able to turn a broken state green.
-- **Historical entries each have an `x`.** Dismissing means "I have read this",
-  never "this is fixed".
-- When a condition clears, its pinned entry **becomes an ordinary dismissable
-  row**. It is not deleted — the recovery must not erase the evidence that
-  something broke.
+- The **active condition is pinned, has no dismiss control, and is stored
+  outside the historical ring** so eviction can never remove it.
+- **History entries each have an `x`.** Dismissing means "I have read this".
+- A cleared condition **becomes an ordinary dismissable row** rather than
+  disappearing, so the recovery does not erase the evidence.
 
-Each row shows: relative timestamp, the human-readable message, and the
-classification.
+Rows show relative timestamp, message, and classification. Timestamps ladder:
+under 1 h → "20 minutes ago"; under 24 h → "3 hours ago"; under 7 d →
+"Sunday 9:42 AM"; older → "11 Aug, 9:42 AM".
 
-Timestamps degrade across the retention window, so they ladder:
+Width capped at 400 px with wrapping. Dismissed by tapping outside.
 
-- under 1 h → "20 minutes ago"
-- under 24 h → "3 hours ago"
-- under 7 d → "Sunday 9:42 AM"
-- older → "11 Aug, 9:42 AM"
+### Log fingerprinting and bounds
 
-Relative-only is useless at day eleven.
+Entries collapse on a **structured fingerprint** — `(kind, operation, stable
+error code, target identity)` — never on the message text.
 
-Width is capped at 400 px with wrapping. Sizing to content means one long
-exception string produces a popover wider than the window.
+`(kind, message)` was the first draft's key and it does not collapse anything:
+`SocketException: ... timed out after 5002ms` differs on every attempt, so a
+retry storm fills the cap with unique rows and evicts the auth failure that
+actually mattered. Changing detail goes in a `lastDetail` field on the collapsed
+row.
 
-Dismissed by tapping outside, via a barrier.
-
-### Repeat collapsing
-
-A dismissable list assumes a human-sized number of rows. Losing the church WiFi
-on a Friday at a 30-second retry produces roughly 2,880 identical rows before
-Saturday, and around 40,000 across a fourteen-day window. The popover becomes
-unusable and `SharedPreferences` gets megabytes of noise.
-
-Entries collapse on `(kind, message)` into one row carrying a count and a
-last-seen time:
-
-> **Network unreachable** — 340 times, most recent 2 minutes ago
-
-One row, one `x`, and strictly more information than 340 rows.
-
-### Log persistence
-
-`SharedPreferences` key `backup_log`, a JSON array, matching how every other
-store in this app persists.
-
-Bounded by **both** 14 days and 200 entries, whichever bites first. Age alone is
-not a bound — collapsing makes a storm cheap, but a bound that depends on
-collapsing working is a bound that fails when collapsing has a bug.
-
-The log survives restarts. A failure that vanishes because the app was quit and
-reopened is a silent failure.
+Bounded by 14 days, 200 rows, **and** a serialized byte cap with per-message
+truncation, since `cause` strings are otherwise unbounded. Persisted in
+`SharedPreferences` under `backup_log`, matching every other store here.
 
 ## Authentication
 
-Two paths, because no single package covers every platform.
+macOS and iOS only. `google_sign_in` 7.2.0 with
+`extension_google_sign_in_as_googleapis_auth`.
 
-| Platform | Mechanism |
-|---|---|
-| macOS, iOS | `google_sign_in` 7.2.0 (macOS 10.15+) with `extension_google_sign_in_as_googleapis_auth` |
-| Linux, Windows | `googleapis_auth` loopback consent flow — development only |
+**The first draft claimed the existing macOS entitlements were already
+sufficient. That is false.** Required and currently absent:
 
-`google_sign_in` does not support Linux. This is why `LocalFileBackupTarget`
-exists: John develops on Linux against a directory, and the Drive path ships to
-the machines that run it. Assumption 3 above.
+- `CFBundleURLTypes` with the reversed OAuth client id in both
+  `macos/Runner/Info.plist` and `ios/Runner/Info.plist`. Without it the browser
+  never returns to the app.
+- A `keychain-access-groups` entitlement containing
+  `$(AppIdentifierPrefix)com.google.GIDSignIn` on macOS. The GoogleSignIn SDK
+  throws a keychain `PlatformException` without it.
+- The same keychain sharing if `flutter_secure_storage` is adopted — and whether
+  a refresh token is ever handed to the app, and therefore whether a second
+  credential store is needed at all, must be **determined from the API rather
+  than assumed**.
 
-**Verify on day one, before anything is built on this:** that adding
-`google_sign_in` to `pubspec.yaml` does not break `flutter run -d linux`.
-Federated plugins without a Linux implementation usually build and throw
-`MissingPluginException` when called, but that must be confirmed rather than
-assumed — if the build breaks, the dependency has to be made conditional and
-that changes the shape of this work.
+Any new Apple dependency must ship as a Swift Package. CocoaPods was removed
+from both platforms in `5608d36`.
 
-macOS entitlements are already sufficient. `network.client` and
-`network.server` are present in both `DebugProfile.entitlements` and
-`Release.entitlements`; the loopback OAuth listener needs the latter.
+### Day-zero spike, before phase 1
 
-Refresh tokens go in secure storage, not `SharedPreferences`. This adds a
-dependency the project does not currently have — `flutter_secure_storage` or
-equivalent — and it must ship as a Swift Package, because CocoaPods was removed
-from both Apple platforms in `5608d36` and reinstating it is a real cost.
-
-Scope is `drive.file` against a visible folder, not `drive.appdata`. A shared
-account makes `appdata` technically workable, but it is invisible in the Drive
-web UI. For a backup, being able to open drive.google.com and see the JSON is
-worth more than tidiness.
+The first draft claimed phase 1 would answer whether `google_sign_in` breaks
+`flutter run -d linux`. It cannot: phase 1 adds no such dependency. That
+question needs its own throwaway spike, run first, covering macOS, iOS and
+Linux builds, OAuth client registration, callback URL configuration, signing and
+bundle identity, and the keychain entitlements.
 
 ## Testing
 
-The existing suite is the model: `test/config_bundle_test.dart` and
-`test/stores_test.dart` cover this area already.
+- **`MockBackupTarget`** — in-memory, scriptable to throw any failure kind on
+  any call, and to simulate a concurrent writer between `latest()` and `put()`.
+- **Engine tests** — canonical serialization is order-independent; hash guard
+  suppresses identical uploads; every row of the pointer transition table;
+  each pull branch, especially dirty-with-moved-remote; fork detection; the
+  single-flight queue serializes out-of-order completions; a pull success does
+  not clear a failed push.
+- **Import contract tests** — the gap the current suite has. Absent preset and
+  visibility keys are deleted; `{}` is rejected as malformed; a newer
+  `schemaVersion` is refused; a failure mid-materialization leaves the previous
+  snapshot intact.
+- **Local target tests** — concurrent writes do not collide; a partial file is
+  quarantined rather than treated as head; atomic rename holds.
+- **Log tests** — fingerprint collapsing; all three bounds; the active condition
+  survives eviction.
+- **Widget tests** — all five pill states; tappable in each; header pins;
+  timestamp ladder boundaries; width cap with a pathological message.
+- **Integration** — edit, observe a revision in a `LocalFileBackupTarget`
+  directory, restart, confirm the pull restores it.
 
-- **`MockBackupTarget`** — in-memory, scriptable to throw any `BackupFailureKind`
-  on any call. Every engine test runs against it. No fake Drive server is
-  needed; the mock rig covers device protocols and has nothing to say here.
-- **Engine unit tests** — hash guard suppresses identical uploads; debounce
-  coalesces bursts; flush-on-background fires; backoff schedule is correct;
-  non-retryable kinds schedule nothing; conflict is detected when
-  `latest().id` moves.
-- **Log unit tests** — collapsing by `(kind, message)`; both bounds enforced;
-  active condition is not dismissable; a cleared condition becomes dismissable
-  rather than disappearing; round-trips through `SharedPreferences`.
-- **Widget tests** — pill renders all three states; is tappable in each;
-  popover header pins; timestamp ladder at each boundary; width cap holds with
-  a pathological message.
-- **Integration** — `integration_test/` already drives the real app. One test:
-  edit config, observe a revision appear in a `LocalFileBackupTarget`
-  directory, restart, confirm it pulls back.
+## Phasing
+
+0. **Spike** — the day-zero auth and platform build questions above. Throwaway.
+1. **Foundations** — `ConfigMutationNotifier` and the eight-store refactor;
+   canonical serialization; `schemaVersion` and validation; the import contract
+   with its tests; the interface and `MockBackupTarget`. No new dependencies.
+2. **Local target and engine** — `LocalFileBackupTarget` with atomic writes and
+   the sandbox decision; `BackupService` with the full protocol, single-flight
+   and durable pending state, tested against the mock.
+3. **Status surface** — pill, popover, log, conflict UI, revision-history
+   picker. Driven by phase 2 with faults injected by the mock.
+4. **Drive** — `DriveBackupTarget`, auth, folder identity, ordering, checksum
+   verification. Last, because it carries every new dependency.
+
+Phase 1 no longer claims to ship user-visible value on its own; it is
+groundwork, and pretending otherwise was how the sandbox and mutation-source
+problems stayed hidden.
 
 ## If there is no internet at church
 
-If assumption 1 is wrong, the shape changes and this section is the amendment.
-
 Uploads become store-and-forward: revisions queue locally and flush when the
-machine next reaches the internet. The pill needs a fourth state — amber,
-"Offline, 3 changes queued" — which is neither a failure nor a success. The
-`BackupTarget` interface is unaffected; `BackupService` grows a local queue, and
-the periodic sweep becomes a connectivity check.
-
-Worth confirming before implementation starts, because it is roughly a day of
-extra work and is far cheaper to design in now than to retrofit.
-
-## Suggested phasing
-
-This is more than one sitting, and the pieces have a natural order. Each phase
-is independently useful and independently testable, which matters because the
-riskiest dependency — Google auth — is not in the first one.
-
-1. **The interface and the local target.** `BackupTargetAbstract`,
-   `BackupRevision`, `BackupFailure`, `LocalFileBackupTarget`,
-   `MockBackupTarget`, and the second-granularity filename fix. No new
-   dependencies, works on Linux, and the existing manual export is refactored
-   onto it. Ships value on its own: timestamped local revisions instead of one
-   overwritten file.
-2. **The engine.** `BackupService` — triggers, hash guard, debounce, retry,
-   conflict detection — tested entirely against `MockBackupTarget`. Still no
-   new dependencies. This is where the logic that is easy to get wrong lives,
-   and it can be got right before any network is involved.
-3. **The status surface.** Pill, popover, `BackupLog`. Driven by phase 2, so it
-   can be built and demonstrated against the local target with faults injected
-   by the mock.
-4. **Drive.** `DriveBackupTarget`, auth, secure token storage. Last, because it
-   carries every new dependency and the only platform risk. By this point
-   everything above it is already proven.
-
-Phase 1 also answers the Linux build question in
-[Authentication](#authentication) at the cheapest possible moment — before
-`google_sign_in` is added at all.
+machine next reaches the internet. The amber "N changes pending" state already
+covers the display. `BackupTarget` is unaffected; `BackupService` grows a
+durable queue, which the durable-pending-work requirement already half builds.
 
 ## Open questions
 
-1. **Internet at church** — assumption 1. Blocking for the offline-queue
-   decision, nothing else.
-2. **Device label** — how does a machine know it is "Mac mini (church)"? A
-   settings field the operator fills in once is the cheap answer.
-3. **First-run adoption** — an existing install has local config and Drive has
-   nothing. Push local up on first sign-in, or ask? Pushing silently is
-   probably right, given nothing can be lost.
-4. **Does the status surface absorb device faults later?** Assumption 2 says
-   not yet. The three known silent failures — socket drop still reading Live,
-   permanent ACK desync, wedged camera — are worse than any backup fault
-   because they happen during a service. If they are ever going to move here,
-   `BackupFailure` should become a subtype of a broader `AppFault` before the
-   log format is fixed, rather than after.
+1. **Internet at church** — assumption 1.
+2. **Device label** — a settings field the operator fills in once. Not an audit
+   trail; see Scope.
+3. **Local target: app-private or user-selected?** Blocks phase 2.
+4. **Does the status surface absorb device faults later?** The three known
+   silent failures — socket drop still reading Live, permanent ACK desync,
+   wedged camera — are worse than any backup fault because they happen during a
+   service. If they are ever moving here, `BackupFailure` should become a
+   subtype of a broader `AppFault` **before** the log format is fixed.
+5. **Multiple macOS instances.** Two copies of the app share
+   `SharedPreferences` through a cached legacy API. Either prevent a second
+   instance or define reload semantics.
+
+## Review history
+
+Reviewed adversarially on 21 Aug 2026 by `gpt-5.6-sol` (high effort) and
+Antigravity, independently, against the repository.
+
+Accepted and folded in: the `saveToStores()` contract correction and the
+import-contract decision; canonical serialization; the structured log
+fingerprint; the pull algorithm; the three-fact status model; `parentRevisionId`
+with post-upload fork checking; the pointer transition table; `schemaVersion` in
+the envelope and `{}` as malformed; local-target atomicity; the macOS keychain
+and URL-scheme entitlements; the mutation-source refactor; durable pending work;
+Drive folder identity and ordering; conflict-UI recoverability; splitting
+`rateLimited` from `storageFull`; and the day-zero spike replacing phase 1's
+impossible claim.
+
+Cut as YAGNI: `ping()`, which contradicted this document's own argument that the
+pull is the liveness check; and Linux/Windows OAuth, which assumption 3 says
+nobody needs.
+
+**Rejected:** the claim that `AppBar.centerTitle` defaults to true on macOS and
+iOS and would centre the pill. `_getEffectiveCenterTitle`
+(`app_bar.dart:805-816`) returns `actions == null || actions!.length < 2`, and
+this AppBar has four action entries, so it already left-aligns. The suggested
+fix is adopted anyway as cheap insurance, but the stated reason was wrong.
