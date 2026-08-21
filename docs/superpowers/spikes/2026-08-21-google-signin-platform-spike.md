@@ -14,18 +14,16 @@ platform configuration, dependency, or lockfile change remains.
 ## Baseline
 
 - `flutter analyze`: clean (`No issues found!`, exit 0).
-- `flutter test --concurrency=1`: 305 passed, all tests passed (exit 0).
 
-The first run in the fresh worktree stopped at 302 passed with
+The first run in this fresh worktree stopped at 302 passed with three
 `ink_sparkle.frag` shader-compilation failures in
 `multi_device_control_page_test.dart`, `positions_tab_test.dart`, and
-`service_tab_test.dart`. Those failures were a transient Material 3 ink-shader
-cold-cache artifact, not inherited defects: the full suite passed 305/305 on
-rerun in both the main checkout and this worktree, and
-`positions_tab_test.dart` passed 11/11 alone in this worktree. Any recurrence
-must be investigated as a regression until proven otherwise. The per-task gate
-is 305 plus the task's added tests, `All tests passed!`, and zero failures; there
-is no known-failure allowlist.
+`service_tab_test.dart`. After the native-build probe and cleanup, the final
+full-suite rerun in this worktree passed 305/305 (`All tests passed!`, exit 0),
+and `positions_tab_test.dart` passed 11/11 alone in this worktree. Any
+recurrence must be investigated as a regression until proven otherwise. The
+per-task gate is 305 plus the task's added tests, `All tests passed!`, and zero
+failures; there is no known-failure allowlist.
 
 ## Resolution and platform result
 
@@ -96,5 +94,5 @@ Generated SwiftPM workspace caches from the native builds were removed from the
 worktree. Phase 4 should add the actual dependency and Apple configuration only
 when it implements the auth surface, and ask John for the Linux receipt.
 
-Post-cleanup verification was clean: `flutter analyze` exited 0 and
-`flutter test --concurrency=1` passed 305/305.
+Post-cleanup verification in this worktree was clean: `flutter analyze` exited 0
+and `flutter test --concurrency=1` passed 305/305.
