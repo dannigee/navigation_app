@@ -45,6 +45,14 @@ class PushResult {
 /// operation completing after a newer one would overwrite status or
 /// provenance.
 class BackupService {
+  static const _backoff = <Duration>[
+    Duration(seconds: 30),
+    Duration(minutes: 1),
+    Duration(minutes: 2),
+    Duration(minutes: 5),
+    Duration(minutes: 10),
+  ];
+
   final BackupTargetAbstract target;
   final String targetIdentity;
   final Future<String> Function() deviceLabel;
@@ -63,6 +71,19 @@ class BackupService {
     required this.readBundleJson,
     required this.localIsPristine,
   });
+
+  /// How long to wait before retrying after [fault], or null when retrying
+  /// cannot help.
+  ///
+  /// The schedule never terminates. A loop that exhausts its attempts and
+  /// stops is a silent failure with extra steps: the pill would sit red
+  /// forever with nothing trying to clear it.
+  static Duration? nextRetryDelay(AppFault fault, int attempt) {
+    if (!fault.isRetryable) return null;
+    if (fault.sweepOnly) return const Duration(minutes: 10);
+    final i = attempt.clamp(0, _backoff.length - 1).toInt();
+    return _backoff[i];
+  }
 
   /// Serializes [action] behind every operation already queued.
   Future<T> _single<T>(Future<T> Function() action) {
