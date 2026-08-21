@@ -146,11 +146,12 @@ class _MasterControlWidgetState extends State<MasterControlWidget> {
 
   void _selectItem(int index) {
     _flushPendingRename();
+    final device = _devices[_selectedDeviceIndex];
     final names = _namesByDevice[_selectedDeviceIndex] ?? {};
     final visibility = _visibilityByDevice[_selectedDeviceIndex] ?? {};
     setState(() {
       _selectedItemIndex = index;
-      _renameController.text = names[index] ?? '';
+      _renameController.text = names[index] ?? device.defaultLabel(index);
       _selectedVisibility = visibility[index] ?? ItemVisibility.visible;
     });
   }
@@ -262,59 +263,64 @@ class _MasterControlWidgetState extends State<MasterControlWidget> {
             // Grid
             Expanded(child: _buildGrid(device, names)),
 
-            // Rename / Visibility section
-            const Divider(height: 24),
-            Row(
-              children: [
-                const Text('Rename',
-                    style: TextStyle(fontSize: 14, fontWeight: FontWeight.bold)),
-                if (selectedLabel != null) ...[
-                  const SizedBox(width: 8),
-                  Text('— $selectedLabel',
-                      style: const TextStyle(color: Colors.grey, fontSize: 13)),
+            // Rename / Visibility section — editing tools, so only shown
+            // in Edit Mode; outside it, tapping a button executes instead.
+            if (_editMode) ...[
+              const Divider(height: 24),
+              Row(
+                children: [
+                  const Text('Rename',
+                      style:
+                          TextStyle(fontSize: 14, fontWeight: FontWeight.bold)),
+                  if (selectedLabel != null) ...[
+                    const SizedBox(width: 8),
+                    Text('— $selectedLabel',
+                        style:
+                            const TextStyle(color: Colors.grey, fontSize: 13)),
+                  ],
                 ],
-              ],
-            ),
-            const SizedBox(height: 6),
-            if (selectedLabel == null)
-              const Padding(
-                padding: EdgeInsets.only(bottom: 6.0),
-                child: Text('Tap a button above to select it for renaming',
-                    style: TextStyle(color: Colors.grey, fontSize: 12)),
               ),
-            TextField(
-              controller: _renameController,
-              enabled: _selectedItemIndex != null,
-              onChanged: _onRenameChanged,
-              onSubmitted: _onRenameSubmitted,
-              decoration: const InputDecoration(
-                labelText: 'Name',
-                border: OutlineInputBorder(),
-                isDense: true,
+              const SizedBox(height: 6),
+              if (selectedLabel == null)
+                const Padding(
+                  padding: EdgeInsets.only(bottom: 6.0),
+                  child: Text('Tap a button above to select it for renaming',
+                      style: TextStyle(color: Colors.grey, fontSize: 12)),
+                ),
+              TextField(
+                controller: _renameController,
+                enabled: _selectedItemIndex != null,
+                onChanged: _onRenameChanged,
+                onSubmitted: _onRenameSubmitted,
+                decoration: const InputDecoration(
+                  labelText: 'Name',
+                  border: OutlineInputBorder(),
+                  isDense: true,
+                ),
               ),
-            ),
-            const SizedBox(height: 12),
-            const Text('Visibility',
-                style: TextStyle(fontSize: 14, fontWeight: FontWeight.bold)),
-            const SizedBox(height: 6),
-            SegmentedButton<ItemVisibility>(
-              segments: const [
-                ButtonSegment(
-                  value: ItemVisibility.visible,
-                  label: Text('Visible'),
-                  icon: Icon(Icons.visibility),
-                ),
-                ButtonSegment(
-                  value: ItemVisibility.hidden,
-                  label: Text('Hidden'),
-                  icon: Icon(Icons.visibility_off),
-                ),
-              ],
-              selected: {_selectedVisibility},
-              onSelectionChanged: _selectedItemIndex != null
-                  ? (selection) => _saveVisibility(selection.first)
-                  : null,
-            ),
+              const SizedBox(height: 12),
+              const Text('Visibility',
+                  style: TextStyle(fontSize: 14, fontWeight: FontWeight.bold)),
+              const SizedBox(height: 6),
+              SegmentedButton<ItemVisibility>(
+                segments: const [
+                  ButtonSegment(
+                    value: ItemVisibility.visible,
+                    label: Text('Visible'),
+                    icon: Icon(Icons.visibility),
+                  ),
+                  ButtonSegment(
+                    value: ItemVisibility.hidden,
+                    label: Text('Hidden'),
+                    icon: Icon(Icons.visibility_off),
+                  ),
+                ],
+                selected: {_selectedVisibility},
+                onSelectionChanged: _selectedItemIndex != null
+                    ? (selection) => _saveVisibility(selection.first)
+                    : null,
+              ),
+            ],
           ],
         ),
       ),
@@ -337,28 +343,25 @@ class _MasterControlWidgetState extends State<MasterControlWidget> {
       children: indices.map((index) {
         final label = names[index] ?? device.defaultLabel(index);
         final isSelected = _selectedItemIndex == index;
-        return Tooltip(
-          message: label,
-          child: FilledButton(
-            style: FilledButton.styleFrom(
-              shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(8.0)),
-              padding: EdgeInsets.zero,
-              tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-              textStyle: const TextStyle(fontSize: 12),
-              backgroundColor:
-                  isSelected ? Theme.of(context).colorScheme.tertiary : null,
-            ),
-            onPressed: () {
-              if (_editMode) {
-                _selectItem(index);
-                return;
-              }
-              _executeSelected(index);
-              _selectItem(index);
-            },
-            child: Text(label),
+        return FilledButton(
+          style: FilledButton.styleFrom(
+            shape:
+                RoundedRectangleBorder(borderRadius: BorderRadius.circular(8.0)),
+            padding: EdgeInsets.zero,
+            tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+            textStyle: const TextStyle(fontSize: 12),
+            backgroundColor:
+                isSelected ? Theme.of(context).colorScheme.tertiary : null,
           ),
+          onPressed: () {
+            if (_editMode) {
+              _selectItem(index);
+              return;
+            }
+            _executeSelected(index);
+            _selectItem(index);
+          },
+          child: Text(label),
         );
       }).toList(),
     );
