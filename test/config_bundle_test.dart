@@ -11,6 +11,7 @@ import 'package:navigation_app/services/position_store.dart';
 import 'package:navigation_app/services/service_store.dart';
 
 ConfigBundle _full() => ConfigBundle(
+      schemaVersion: ConfigBundle.currentSchemaVersion,
       positions: [
         Position(id: 'pos1', name: 'Lectern'),
         Position(id: 'pos2', name: 'Pulpit'),
@@ -33,8 +34,7 @@ ConfigBundle _full() => ConfigBundle(
             Participant(id: 'pt1', name: 'Reader 1'),
           ],
           steps: [
-            const ServiceStep(
-                id: 'st1', type: StepType.macro, macroNumber: 3),
+            const ServiceStep(id: 'st1', type: StepType.macro, macroNumber: 3),
             const ServiceStep(
                 id: 'st2',
                 type: StepType.ministry,
@@ -69,9 +69,11 @@ ConfigBundle _full() => ConfigBundle(
 
 void main() {
   group('ConfigBundle — serialisation', () {
-    test('toJson/fromJson round-trips all collections including names and visibilities', () {
+    test(
+        'toJson/fromJson round-trips all collections including names and visibilities',
+        () {
       final bundle = _full();
-      final copy = ConfigBundle.fromJson(bundle.toJson());
+      final copy = ConfigBundle.fromJsonValidated(bundle.toJson());
 
       expect(copy.positions.length, 2);
       expect(copy.positions[0].name, 'Lectern');
@@ -107,18 +109,13 @@ void main() {
       expect(copy.visibilities['roland_10.0.1.20']?['5'], 'hide');
     });
 
-    test('missing keys in JSON produce empty collections and empty maps', () {
-      final bundle = ConfigBundle.fromJson({});
-      expect(bundle.positions, isEmpty);
-      expect(bundle.people, isEmpty);
-      expect(bundle.services, isEmpty);
-      expect(bundle.heightRanges, isEmpty);
-      expect(bundle.presetNames, isEmpty);
-      expect(bundle.visibilities, isEmpty);
-    });
-
     test('toJson uses positions, services, and heightRanges keys', () {
-      const bundle = ConfigBundle(positions: [], people: [], services: []);
+      const bundle = ConfigBundle(
+        schemaVersion: ConfigBundle.currentSchemaVersion,
+        positions: [],
+        people: [],
+        services: [],
+      );
       final json = bundle.toJson();
       expect(json.containsKey('positions'), isTrue);
       expect(json.containsKey('services'), isTrue);
@@ -126,13 +123,6 @@ void main() {
       expect(json.containsKey('roles'), isFalse);
       expect(json.containsKey('scenes'), isFalse);
       expect(json.containsKey('serviceOrders'), isFalse);
-    });
-
-    test('toJson omits presetNames and visibilities when empty', () {
-      const bundle = ConfigBundle(positions: [], people: [], services: []);
-      final json = bundle.toJson();
-      expect(json.containsKey('presetNames'), isFalse);
-      expect(json.containsKey('visibilities'), isFalse);
     });
 
     test('toJson includes presetNames and visibilities when non-empty', () {
@@ -143,8 +133,13 @@ void main() {
     });
 
     test('empty bundle round-trips', () {
-      const bundle = ConfigBundle(positions: [], people: [], services: []);
-      final copy = ConfigBundle.fromJson(bundle.toJson());
+      const bundle = ConfigBundle(
+        schemaVersion: ConfigBundle.currentSchemaVersion,
+        positions: [],
+        people: [],
+        services: [],
+      );
+      final copy = ConfigBundle.fromJsonValidated(bundle.toJson());
       expect(copy.positions, isEmpty);
       expect(copy.people, isEmpty);
       expect(copy.services, isEmpty);
@@ -167,7 +162,8 @@ void main() {
       expect(bundle.visibilities, isEmpty);
     });
 
-    test('saveToStores persists positions, people, services, and heightRanges', () async {
+    test('saveToStores persists positions, people, services, and heightRanges',
+        () async {
       await _full().saveToStores();
 
       final positions = await PositionStore.loadAll();
@@ -209,12 +205,12 @@ void main() {
       expect(visRaw, contains('basic'));
     });
 
-    test('fromStores reads preset names and visibilities from SharedPreferences',
+    test(
+        'fromStores reads preset names and visibilities from SharedPreferences',
         () async {
       final prefs = await SharedPreferences.getInstance();
       await prefs.setString('preset_names_10.0.1.10', '{"0":"Wide Shot"}');
-      await prefs.setString(
-          'item_visibility_roland_10.0.1.20', '{"3":"hide"}');
+      await prefs.setString('item_visibility_roland_10.0.1.20', '{"3":"hide"}');
 
       final bundle = await ConfigBundle.fromStores();
       expect(bundle.presetNames['10.0.1.10']?['0'], 'Wide Shot');
@@ -241,6 +237,7 @@ void main() {
       await _full().saveToStores();
 
       await const ConfigBundle(
+        schemaVersion: ConfigBundle.currentSchemaVersion,
         positions: [],
         people: [],
         services: [],
@@ -255,7 +252,7 @@ void main() {
     test('toJson/fromJson/saveToStores/fromStores full round-trip', () async {
       final original = _full();
       final json = original.toJson();
-      final decoded = ConfigBundle.fromJson(json);
+      final decoded = ConfigBundle.fromJsonValidated(json);
       await decoded.saveToStores();
       final reloaded = await ConfigBundle.fromStores();
 

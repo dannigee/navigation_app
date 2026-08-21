@@ -9,6 +9,7 @@ import '../models/operator_profile.dart';
 import '../models/person.dart';
 import '../models/position.dart';
 import '../models/service.dart';
+import 'backup/app_fault.dart';
 import 'device_config_store.dart';
 import 'height_range_store.dart';
 import 'operator_store.dart';
@@ -17,6 +18,11 @@ import 'position_store.dart';
 import 'service_store.dart';
 
 class ConfigBundle {
+  /// Schema version of the source document.
+  final int schemaVersion;
+
+  static const int currentSchemaVersion = 1;
+
   final List<Position> positions;
   final List<Person> people;
   final List<Service> services;
@@ -38,6 +44,7 @@ class ConfigBundle {
   final List<OperatorProfile>? operators;
 
   const ConfigBundle({
+    required this.schemaVersion,
     required this.positions,
     required this.people,
     required this.services,
@@ -50,12 +57,13 @@ class ConfigBundle {
   });
 
   Map<String, dynamic> toJson() => {
+        'schemaVersion': currentSchemaVersion,
         'positions': positions.map((p) => p.toJson()).toList(),
         'people': people.map((p) => p.toJson()).toList(),
         'services': services.map((s) => s.toJson()).toList(),
         'heightRanges': heightRanges.map((r) => r.toJson()).toList(),
-        if (presetNames.isNotEmpty) 'presetNames': presetNames,
-        if (visibilities.isNotEmpty) 'visibilities': visibilities,
+        'presetNames': presetNames,
+        'visibilities': visibilities,
         if (rolandIp != null) 'rolandIp': rolandIp,
         if (cameras != null)
           'cameras': cameras!.map((c) => c.toJson()).toList(),
@@ -63,41 +71,92 @@ class ConfigBundle {
           'operators': operators!.map((o) => o.toJson()).toList(),
       };
 
-  factory ConfigBundle.fromJson(Map<String, dynamic> json) => ConfigBundle(
-        positions: (json['positions'] as List<dynamic>? ?? [])
-            .map((p) => Position.fromJson(p as Map<String, dynamic>))
-            .toList(),
-        people: (json['people'] as List<dynamic>? ?? [])
-            .map((p) => Person.fromJson(p as Map<String, dynamic>))
-            .toList(),
-        services: (json['services'] as List<dynamic>? ?? [])
-            .map((s) => Service.fromJson(s as Map<String, dynamic>))
-            .toList(),
-        heightRanges: (json['heightRanges'] as List<dynamic>? ?? [])
-            .map((r) => HeightRange.fromJson(r as Map<String, dynamic>))
-            .toList(),
-        presetNames: _parseStringStringMaps(json['presetNames']),
-        visibilities: _parseStringStringMaps(json['visibilities']),
-        rolandIp: json['rolandIp'] as String?,
-        cameras: (json['cameras'] as List<dynamic>?)
-            ?.map((c) => CameraEntry.fromJson(c as Map<String, dynamic>))
-            .toList(),
-        operators: (json['operators'] as List<dynamic>?)
-            ?.map((o) => OperatorProfile.fromJson(o as Map<String, dynamic>))
-            .toList(),
-      );
+  /// The only parser. Throws [AppFault] rather than silently producing an
+  /// empty bundle: applying an all-empty bundle replaces four stores with
+  /// nothing, so a truncated document must be a fault, not a destructive
+  /// restore.
+  factory ConfigBundle.fromJsonValidated(Map<String, dynamic> json) {
+    Never bad(String why) =>
+        throw AppFault.backup(BackupFailureKind.malformedRemote, why);
 
-  static Map<String, Map<String, String>> _parseStringStringMaps(dynamic raw) {
-    if (raw is! Map<String, dynamic>) return {};
-    return raw.map((deviceKey, inner) {
-      if (inner is! Map<String, dynamic>) {
-        return MapEntry(deviceKey, <String, String>{});
+    final version = json['schemaVersion'];
+    if (version is! int) bad('schemaVersion is missing or not an integer');
+    if (version > currentSchemaVersion) {
+      throw AppFault.backup(
+          BackupFailureKind.unsupportedSchema,
+          'This backup was written by a newer version of the app '
+          '(schema $version, this build understands $currentSchemaVersion). '
+          'Update the app to sync.');
+    }
+    if (version != currentSchemaVersion) {
+      bad('schemaVersion $version is not a schema this app has ever written');
+    }
+
+    List<Map<String, dynamic>> requireObjectList(String field) {
+      final raw = json[field];
+      if (raw is! List) bad('required field "$field" is missing or not a list');
+      return raw.map((e) {
+        if (e is! Map<String, dynamic>) bad('"$field" contains a non-object');
+        return e;
+      }).toList();
+    }
+
+    Map<String, Map<String, String>> optionalStringMaps(String field) {
+      final raw = json[field];
+      if (raw == null) return const {};
+      if (raw is! Map) bad('"$field" is present but not a map');
+      final out = <String, Map<String, String>>{};
+      raw.forEach((k, v) {
+        if (v is! Map) bad('"$field.$k" is not a map');
+        final inner = <String, String>{};
+        v.forEach((ik, iv) {
+          if (iv is! String) bad('"$field.$k.$ik" is not a string');
+          inner['$ik'] = iv;
+        });
+        out['$k'] = inner;
+      });
+      return out;
+    }
+
+    T guard<T>(String field, T Function() parse) {
+      try {
+        return parse();
+      } on AppFault {
+        rethrow;
+      } catch (e) {
+        throw AppFault.backup(
+            BackupFailureKind.malformedRemote, 'could not parse "$field": $e',
+            cause: e);
       }
-      return MapEntry(
-        deviceKey,
-        inner.map((k, v) => MapEntry(k, v as String)),
-      );
-    });
+    }
+
+    return ConfigBundle(
+      schemaVersion: version,
+      positions: guard('positions',
+          () => requireObjectList('positions').map(Position.fromJson).toList()),
+      people: guard('people',
+          () => requireObjectList('people').map(Person.fromJson).toList()),
+      services: guard('services',
+          () => requireObjectList('services').map(Service.fromJson).toList()),
+      heightRanges: guard(
+          'heightRanges',
+          () => requireObjectList('heightRanges')
+              .map(HeightRange.fromJson)
+              .toList()),
+      presetNames: optionalStringMaps('presetNames'),
+      visibilities: optionalStringMaps('visibilities'),
+      rolandIp: guard('rolandIp', () => json['rolandIp'] as String?),
+      cameras: guard(
+          'cameras',
+          () => (json['cameras'] as List<dynamic>?)
+              ?.map((c) => CameraEntry.fromJson(c as Map<String, dynamic>))
+              .toList()),
+      operators: guard(
+          'operators',
+          () => (json['operators'] as List<dynamic>?)
+              ?.map((o) => OperatorProfile.fromJson(o as Map<String, dynamic>))
+              .toList()),
+    );
   }
 
   static const _presetPrefix = 'preset_names_';
@@ -140,6 +199,7 @@ class ConfigBundle {
     final operators = await OperatorStore.loadAll();
 
     return ConfigBundle(
+      schemaVersion: currentSchemaVersion,
       positions: results[0] as List<Position>,
       people: results[1] as List<Person>,
       services: results[2] as List<Service>,
@@ -214,6 +274,6 @@ class ConfigBundle {
     if (json is! Map<String, dynamic>) {
       throw const FormatException('Not a valid configuration file');
     }
-    return ConfigBundle.fromJson(json);
+    return ConfigBundle.fromJsonValidated(json);
   }
 }
