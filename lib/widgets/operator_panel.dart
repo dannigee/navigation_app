@@ -52,7 +52,10 @@ class _OperatorPanelState extends State<OperatorPanel> {
     _setupListeners();
     _loadNames(_selectedDeviceIndex);
     _loadVisibility(_selectedDeviceIndex);
+    VisibilityStore.changes.addListener(_onVisibilityChangedElsewhere);
   }
+
+  void _onVisibilityChangedElsewhere() => _loadVisibility(_selectedDeviceIndex);
 
   void _buildDevices() {
     _devices = [
@@ -73,6 +76,7 @@ class _OperatorPanelState extends State<OperatorPanel> {
 
   @override
   void dispose() {
+    VisibilityStore.changes.removeListener(_onVisibilityChangedElsewhere);
     _removeListeners();
     _scrollController.dispose();
     super.dispose();

@@ -42,6 +42,17 @@ class _MasterControlWidgetState extends State<MasterControlWidget> {
   final List<VoidCallback> _deviceListeners = [];
   Timer? _renameDebounce;
 
+  // Serializes every name-save so a flush and the autosave it preempted (or
+  // two autosaves for different items in quick succession) always persist
+  // in the order they were issued, never interleaved.
+  Future<void> _saveQueue = Future.value();
+
+  Future<void> _enqueueSave(Future<void> Function() op) {
+    final result = _saveQueue.then((_) => op());
+    _saveQueue = result.then((_) {}, onError: (_) {});
+    return result;
+  }
+
   @override
   void initState() {
     super.initState();
@@ -66,13 +77,17 @@ class _MasterControlWidgetState extends State<MasterControlWidget> {
   }
 
   /// Persists a still-pending debounced rename immediately -- called before
-  /// the selection/device changes out from under it, and on dispose.
+  /// the selection/device changes out from under it, and on dispose. Enqueued
+  /// on [_saveQueue] rather than awaited here (dispose can't await), but the
+  /// queue still guarantees this write lands before any later autosave.
   void _flushPendingRename() {
     if (_renameDebounce?.isActive ?? false) {
       _renameDebounce!.cancel();
       if (_selectedItemIndex != null) {
-        _devices[_selectedDeviceIndex]
-            .saveName(_selectedItemIndex!, _renameController.text.trim());
+        final device = _devices[_selectedDeviceIndex];
+        final index = _selectedItemIndex!;
+        final name = _renameController.text.trim();
+        _enqueueSave(() => device.saveName(index, name));
       }
     }
   }
@@ -168,24 +183,29 @@ class _MasterControlWidgetState extends State<MasterControlWidget> {
 
   Future<void> _saveRename() async {
     if (_selectedItemIndex == null) return;
-    final device = _devices[_selectedDeviceIndex];
+    final deviceIndex = _selectedDeviceIndex;
+    final device = _devices[deviceIndex];
     final index = _selectedItemIndex!;
     final name = _renameController.text.trim();
-    await device.saveName(index, name);
+    await _enqueueSave(() => device.saveName(index, name));
     final names = await device.loadNames();
-    if (mounted) setState(() => _namesByDevice[_selectedDeviceIndex] = names);
+    // Written into the device that was active when this save was kicked
+    // off, not whichever device happens to be selected now -- the user may
+    // have switched devices while the save/reload above were in flight.
+    if (mounted) setState(() => _namesByDevice[deviceIndex] = names);
     widget.onResponse(
         '${device.describe(index)} renamed to "${name.isEmpty ? "(cleared)" : name}"');
   }
 
   Future<void> _saveVisibility(ItemVisibility visibility) async {
     if (_selectedItemIndex == null) return;
-    final device = _devices[_selectedDeviceIndex];
+    final deviceIndex = _selectedDeviceIndex;
+    final device = _devices[deviceIndex];
     final index = _selectedItemIndex!;
     setState(() => _selectedVisibility = visibility);
     await device.saveVisibility(index, visibility);
     final stored = await device.loadVisibility();
-    if (mounted) setState(() => _visibilityByDevice[_selectedDeviceIndex] = stored);
+    if (mounted) setState(() => _visibilityByDevice[deviceIndex] = stored);
   }
 
   @override
