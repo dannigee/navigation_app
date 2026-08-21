@@ -212,11 +212,24 @@ Documented because they matter if anyone diffs this against a real V-160HD:
 2. **Camera pan/tilt/zoom are normalised** (`-1.0..1.0`, zoom `1.0..4.0`)
    instead of the AW hex ranges. The app only recalls presets, never drives
    absolute position, so the normalised space exists purely for the inspector.
-3. **The mock is built from the client's beliefs about the protocol.** Where
-   the app's reverse-engineering is wrong, this will faithfully reproduce the
-   same wrong assumption and report success. It de-risks the disconnect,
-   deadlock and desync classes of bug; it does not replace verification against
-   real hardware.
+3. **The mock is built from the client's beliefs about the protocol** — but
+   those beliefs were checked against the physical switcher. The last changes
+   to either wire-facing service were `babe567` (19 Jun 2026) and `42782e3` /
+   `34eed0a` / `10a81b6` (29 Jun 2026), authored from the church AV machine
+   while working against the real V-160HD and cameras. `roland_service.dart`
+   and `panasonic_service.dart` have not been touched since; everything after
+   that date is UI, settings, tooling or build. So the grammar this mock
+   answers is the grammar that was last observed to work on real hardware,
+   not a guess.
+
+   Two gaps survive that. Firmware moves — the observations were made against
+   3.41.312, and the rig has no way to notice if a later firmware changes a
+   response. And the mock only models commands the app actually sends, so a
+   path the app has never exercised live is unverified no matter how green
+   `verify.dart` runs. Deviation 1 below is a known, deliberate divergence.
+   The rig de-risks the disconnect, deadlock and desync classes of bug
+   thoroughly; treat protocol conformance as inherited evidence with a date
+   on it.
 4. **Preset names containing spaces will fail** — `_encodeCommand`
    (`panasonic_service.dart:379`) percent-encodes only `#`, so a name with a
    space produces a malformed request line. That is a real client bug and is
