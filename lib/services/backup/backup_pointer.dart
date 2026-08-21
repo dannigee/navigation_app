@@ -52,5 +52,6 @@ class BackupPointer {
     final prefs = await SharedPreferences.getInstance();
     await prefs.remove(revisionKey);
     await prefs.remove(hashKey);
+    await prefs.remove(targetKey);
   }
 }

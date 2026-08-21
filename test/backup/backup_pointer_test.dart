@@ -32,7 +32,9 @@ void main() {
     await BackupPointer.save(
         revisionId: 'rev-1', recordedHash: 'h1', targetIdentity: 'folder-A');
     await BackupPointer.clear();
-    expect((await BackupPointer.load()).isProvenanced, isFalse);
+    final p = await BackupPointer.load();
+    expect(p.isProvenanced, isFalse);
+    expect(p.matchesTarget('folder-A'), isFalse);
   });
 
   test('local is clean only when its hash matches the recorded one', () async {
