@@ -24,16 +24,18 @@ class OperatorStore {
   }
 
   static Future<void> saveAll(List<OperatorProfile> profiles) async {
-    final prefs = await SharedPreferences.getInstance();
-    final persisted = await prefs.setString(
-      _operatorsKey,
-      jsonEncode(profiles.map((p) => p.toJson()).toList()),
-    );
-    if (!persisted) {
-      await prefs.reload();
-      throw StateError('Could not persist operator profiles');
-    }
-    await ConfigMutationNotifier.instance.notify();
+    await ConfigMutationNotifier.instance.runExclusive(() async {
+      final prefs = await SharedPreferences.getInstance();
+      final persisted = await prefs.setString(
+        _operatorsKey,
+        jsonEncode(profiles.map((p) => p.toJson()).toList()),
+      );
+      if (!persisted) {
+        await prefs.reload();
+        throw StateError('Could not persist operator profiles');
+      }
+      await ConfigMutationNotifier.instance.notify();
+    });
   }
 
   static Future<String> loadActiveId() async {
@@ -42,12 +44,14 @@ class OperatorStore {
   }
 
   static Future<void> saveActiveId(String id) async {
-    final prefs = await SharedPreferences.getInstance();
-    final persisted = await prefs.setString(_activeIdKey, id);
-    if (!persisted) {
-      await prefs.reload();
-      throw StateError('Could not persist active operator');
-    }
-    await ConfigMutationNotifier.instance.notify();
+    await ConfigMutationNotifier.instance.runExclusive(() async {
+      final prefs = await SharedPreferences.getInstance();
+      final persisted = await prefs.setString(_activeIdKey, id);
+      if (!persisted) {
+        await prefs.reload();
+        throw StateError('Could not persist active operator');
+      }
+      await ConfigMutationNotifier.instance.notify();
+    });
   }
 }

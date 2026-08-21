@@ -18,19 +18,21 @@ class PresetNameStore {
   /// Saves [name] for [presetIndex] on [cameraIp]. Pass an empty string to clear.
   static Future<void> save(
       String cameraIp, int presetIndex, String name) async {
-    final prefs = await SharedPreferences.getInstance();
-    final existing = await loadAll(cameraIp);
-    if (name.isEmpty) {
-      existing.remove(presetIndex);
-    } else {
-      existing[presetIndex] = name;
-    }
-    final persisted = await prefs.setString(
-        _key(cameraIp), jsonEncode(existing.map((k, v) => MapEntry('$k', v))));
-    if (!persisted) {
-      await prefs.reload();
-      throw StateError('Could not persist preset names');
-    }
-    await ConfigMutationNotifier.instance.notify();
+    await ConfigMutationNotifier.instance.runExclusive(() async {
+      final prefs = await SharedPreferences.getInstance();
+      final existing = await loadAll(cameraIp);
+      if (name.isEmpty) {
+        existing.remove(presetIndex);
+      } else {
+        existing[presetIndex] = name;
+      }
+      final persisted = await prefs.setString(_key(cameraIp),
+          jsonEncode(existing.map((k, v) => MapEntry('$k', v))));
+      if (!persisted) {
+        await prefs.reload();
+        throw StateError('Could not persist preset names');
+      }
+      await ConfigMutationNotifier.instance.notify();
+    });
   }
 }

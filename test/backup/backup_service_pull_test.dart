@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 
 import 'package:flutter_test/flutter_test.dart';
@@ -342,5 +343,48 @@ void main() {
     expect(await ConfigMutationNotifier.instance.generation(), generation,
         reason: 'the hash guard, not the notifier, caught this write');
     expect(result.revision, next);
+  });
+
+  test('an edit starting after the guards waits for restore and survives',
+      () async {
+    await PositionStore.saveAll([
+      Position(id: 'base', name: 'base'),
+    ]);
+    final local = (await ConfigBundle.fromStores()).toJson();
+    final base = await remotePut(doc('base'));
+    await BackupPointer.save(
+        revisionId: base.id,
+        recordedHash: canonicalHash(local),
+        targetIdentity: identity);
+    await remotePut(doc('remote'), parent: base.id);
+    var reads = 0;
+    Future<void>? externalWrite;
+    final svc = BackupService(
+      target: target,
+      targetIdentity: identity,
+      deviceLabel: () async => 'Mac mini',
+      readBundleJson: () async {
+        final snapshot = (await ConfigBundle.fromStores()).toJson();
+        reads += 1;
+        if (reads == 2) {
+          Zone.root.run(() {
+            externalWrite = Future<void>.microtask(() => PositionStore.saveAll([
+                  Position(id: 'external', name: 'external'),
+                ]));
+          });
+        }
+        return snapshot;
+      },
+      localIsPristine: () async => false,
+    );
+
+    final result = await svc.pull();
+    await externalWrite;
+
+    expect(result.outcome, anyOf(PullOutcome.applied, PullOutcome.conflict));
+    expect((await PositionStore.loadAll()).single.id, 'external',
+        reason: 'an edit after the last guard must never be overwritten');
+    expect(await ConfigMutationNotifier.instance.isDirty(), isTrue,
+        reason: 'the surviving edit must not be falsely marked synced');
   });
 }

@@ -209,25 +209,27 @@ class BackupService {
 
     // Throws AppFault on anything malformed, before a single store is touched.
     final bundle = ConfigBundle.fromJsonValidated(decoded);
-    final currentGeneration =
-        await ConfigMutationNotifier.instance.generation();
-    final currentLocalHash = canonicalHash(await readBundleJson());
-    if (currentGeneration != expectedGeneration ||
-        currentLocalHash != expectedLocalHash) {
-      return false;
-    }
-    await bundle.applyTransactionally(markAsPending: false);
+    return ConfigMutationNotifier.instance.runExclusive(() async {
+      final currentGeneration =
+          await ConfigMutationNotifier.instance.generation();
+      final currentLocalHash = canonicalHash(await readBundleJson());
+      if (currentGeneration != expectedGeneration ||
+          currentLocalHash != expectedLocalHash) {
+        return false;
+      }
+      await bundle.applyTransactionally(markAsPending: false);
 
-    // applyTransactionally deliberately clears the pointer, because an import
-    // is unprovenanced. Applying a fetched revision is the one case where we
-    // know exactly what it came from, so re-establish it here.
-    await BackupPointer.save(
-      revisionId: revision.id,
-      recordedHash: canonicalHash(decoded),
-      targetIdentity: targetIdentity,
-    );
-    await ConfigMutationNotifier.instance.markSynced(expectedGeneration);
-    return true;
+      // applyTransactionally deliberately clears the pointer, because an
+      // import is unprovenanced. Applying a fetched revision is the one case
+      // where we know exactly what it came from, so re-establish it here.
+      await BackupPointer.save(
+        revisionId: revision.id,
+        recordedHash: canonicalHash(decoded),
+        targetIdentity: targetIdentity,
+      );
+      await ConfigMutationNotifier.instance.markSynced(expectedGeneration);
+      return true;
+    });
   }
 
   Future<PushResult> push() =>

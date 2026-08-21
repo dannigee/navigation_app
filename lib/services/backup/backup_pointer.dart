@@ -44,12 +44,39 @@ class BackupPointer {
     required String targetIdentity,
   }) async {
     final prefs = await SharedPreferences.getInstance();
-    await _requirePersisted(
-        prefs.setString(revisionKey, revisionId), prefs, 'revision');
-    await _requirePersisted(
-        prefs.setString(hashKey, recordedHash), prefs, 'content hash');
-    await _requirePersisted(
-        prefs.setString(targetKey, targetIdentity), prefs, 'target identity');
+    final previous = <String, String?>{
+      revisionKey: prefs.getString(revisionKey),
+      hashKey: prefs.getString(hashKey),
+      targetKey: prefs.getString(targetKey),
+    };
+    try {
+      await _requirePersisted(
+          prefs.setString(hashKey, recordedHash), prefs, 'content hash');
+      await _requirePersisted(
+          prefs.setString(targetKey, targetIdentity), prefs, 'target identity');
+      // Revision is still the commit field, so readers cannot observe a new
+      // authoritative revision before its supporting fields are durable.
+      await _requirePersisted(
+          prefs.setString(revisionKey, revisionId), prefs, 'revision');
+    } on StateError catch (error, stackTrace) {
+      try {
+        for (final entry in previous.entries) {
+          final oldValue = entry.value;
+          await _requirePersisted(
+            oldValue == null
+                ? prefs.remove(entry.key)
+                : prefs.setString(entry.key, oldValue),
+            prefs,
+            'rollback for ${entry.key}',
+          );
+        }
+      } on StateError catch (rollbackError) {
+        throw StateError(
+            'Could not persist backup provenance and rollback failed: '
+            '$rollbackError');
+      }
+      Error.throwWithStackTrace(error, stackTrace);
+    }
   }
 
   static Future<void> clear() async {

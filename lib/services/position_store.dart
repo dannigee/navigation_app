@@ -17,13 +17,15 @@ class PositionStore {
   }
 
   static Future<void> saveAll(List<Position> positions) async {
-    final prefs = await SharedPreferences.getInstance();
-    final persisted = await prefs.setString(
-        _key, jsonEncode(positions.map((p) => p.toJson()).toList()));
-    if (!persisted) {
-      await prefs.reload();
-      throw StateError('Could not persist positions');
-    }
-    await ConfigMutationNotifier.instance.notify();
+    await ConfigMutationNotifier.instance.runExclusive(() async {
+      final prefs = await SharedPreferences.getInstance();
+      final persisted = await prefs.setString(
+          _key, jsonEncode(positions.map((p) => p.toJson()).toList()));
+      if (!persisted) {
+        await prefs.reload();
+        throw StateError('Could not persist positions');
+      }
+      await ConfigMutationNotifier.instance.notify();
+    });
   }
 }

@@ -17,13 +17,15 @@ class ServiceStore {
   }
 
   static Future<void> saveAll(List<Service> services) async {
-    final prefs = await SharedPreferences.getInstance();
-    final persisted = await prefs.setString(
-        _key, jsonEncode(services.map((s) => s.toJson()).toList()));
-    if (!persisted) {
-      await prefs.reload();
-      throw StateError('Could not persist services');
-    }
-    await ConfigMutationNotifier.instance.notify();
+    await ConfigMutationNotifier.instance.runExclusive(() async {
+      final prefs = await SharedPreferences.getInstance();
+      final persisted = await prefs.setString(
+          _key, jsonEncode(services.map((s) => s.toJson()).toList()));
+      if (!persisted) {
+        await prefs.reload();
+        throw StateError('Could not persist services');
+      }
+      await ConfigMutationNotifier.instance.notify();
+    });
   }
 }

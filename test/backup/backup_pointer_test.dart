@@ -4,7 +4,12 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:shared_preferences_platform_interface/shared_preferences_platform_interface.dart';
 
 class _RefuseHashWriteStore extends InMemorySharedPreferencesStore {
-  _RefuseHashWriteStore() : super.withData({});
+  _RefuseHashWriteStore()
+      : super.withData({
+          'flutter.${BackupPointer.revisionKey}': 'old-rev',
+          'flutter.${BackupPointer.hashKey}': 'old-hash',
+          'flutter.${BackupPointer.targetKey}': 'folder-A',
+        });
 
   @override
   Future<bool> setValue(String valueType, String key, Object value) async {
@@ -71,5 +76,10 @@ void main() {
           revisionId: 'rev-1', recordedHash: 'h1', targetIdentity: 'folder-A'),
       throwsA(isA<StateError>()),
     );
+    final pointer = await BackupPointer.load();
+    expect(pointer.revisionId, 'old-rev');
+    expect(pointer.recordedHash, 'old-hash');
+    expect(pointer.targetIdentity, 'folder-A',
+        reason: 'a refused pointer save must leave every field all-old');
   });
 }

@@ -224,6 +224,14 @@ class ConfigBundle {
   Future<void> applyTransactionally({
     int? failAfterWritesForTest,
     bool markAsPending = true,
+  }) =>
+      ConfigMutationNotifier.instance.runExclusive(() => _applyTransactionally(
+          failAfterWritesForTest: failAfterWritesForTest,
+          markAsPending: markAsPending));
+
+  Future<void> _applyTransactionally({
+    int? failAfterWritesForTest,
+    required bool markAsPending,
   }) async {
     var written = 0;
     void tick() {

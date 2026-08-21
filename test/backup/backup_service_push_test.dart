@@ -11,11 +11,18 @@ import 'package:shared_preferences_platform_interface/shared_preferences_platfor
 const identity = 'folder-A';
 
 class _RefusePointerWriteStore extends InMemorySharedPreferencesStore {
-  _RefusePointerWriteStore(Map<String, Object> values) : super.withData(values);
+  _RefusePointerWriteStore(Map<String, Object> values, this.refuseKey)
+      : super.withData(values);
+
+  final String refuseKey;
+  var refused = false;
 
   @override
   Future<bool> setValue(String valueType, String key, Object value) async {
-    if (key == 'flutter.${BackupPointer.revisionKey}') return false;
+    if (key == refuseKey && !refused) {
+      refused = true;
+      return false;
+    }
     return super.setValue(valueType, key, value);
   }
 }
@@ -175,9 +182,10 @@ void main() {
   test('a refused pointer write fails push and leaves the edit pending',
       () async {
     SharedPreferences.resetStatic();
-    SharedPreferencesStorePlatform.instance = _RefusePointerWriteStore({
-      'flutter.${ConfigMutationNotifier.generationKey}': 1,
-    });
+    SharedPreferencesStorePlatform.instance = _RefusePointerWriteStore(
+      {'flutter.${ConfigMutationNotifier.generationKey}': 1},
+      'flutter.${BackupPointer.revisionKey}',
+    );
     addTearDown(() => SharedPreferences.setMockInitialValues({}));
 
     await expectLater(
@@ -194,5 +202,43 @@ void main() {
         reason: 'the remote upload happened before local persistence failed');
     expect(await ConfigMutationNotifier.instance.isDirty(), isTrue,
         reason: 'a failed provenance write must not mark the upload synced');
+  });
+
+  test('a later pointer-field refusal cannot make retry certify a stale hash',
+      () async {
+    final base = await target.put(
+      canonicalJsonEncode(doc()),
+      contentHash: canonicalHash(doc()),
+      parentRevisionId: null,
+      deviceLabel: 'Mac mini',
+    );
+    SharedPreferences.resetStatic();
+    SharedPreferencesStorePlatform.instance = _RefusePointerWriteStore(
+      {
+        'flutter.${ConfigMutationNotifier.generationKey}': 1,
+        'flutter.${BackupPointer.revisionKey}': base.id,
+        'flutter.${BackupPointer.hashKey}': canonicalHash(doc()),
+        'flutter.${BackupPointer.targetKey}': identity,
+      },
+      'flutter.${BackupPointer.hashKey}',
+    );
+    addTearDown(() => SharedPreferences.setMockInitialValues({}));
+
+    await expectLater(
+      service(doc('edited')).push(),
+      throwsA(isA<AppFault>().having((fault) => fault.kind, 'kind',
+          BackupFailureKind.storageWriteFailed.name)),
+    );
+    expect((await BackupPointer.load()).revisionId, base.id,
+        reason: 'revision is the commit field and must move last');
+    expect(await ConfigMutationNotifier.instance.isDirty(), isTrue);
+
+    final retry = await service(doc('edited')).push();
+
+    expect(retry.outcome, PushOutcome.noOp);
+    final repaired = await BackupPointer.load();
+    expect(repaired.revisionId, target.revisions.last.id);
+    expect(repaired.recordedHash, canonicalHash(doc('edited')));
+    expect(await ConfigMutationNotifier.instance.isDirty(), isFalse);
   });
 }
