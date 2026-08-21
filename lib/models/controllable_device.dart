@@ -1,6 +1,7 @@
 import 'package:flutter/foundation.dart';
 import '../services/preset_name_store.dart';
 import '../services/visibility_store.dart';
+import '../utils/label_utils.dart';
 import 'service.dart';
 
 /// Base class for a controllable device (Roland V-160HD macros, Panasonic presets, etc.).
@@ -43,9 +44,7 @@ abstract class ControllableDevice {
   /// name, otherwise just [defaultLabel]. The bare number stays visible next
   /// to a custom name so a renamed item can still be identified by number.
   String labelFor(int index, String? name) =>
-      (name == null || name.isEmpty)
-          ? defaultLabel(index)
-          : '$name (${numberSuffix(index)})';
+      formatItemLabel(name, numberSuffix(index), fallback: defaultLabel(index));
 
   /// Message shown when [itemIndices] is empty and [isLoadingItems] is false.
   String get emptyMessage => 'No items available';

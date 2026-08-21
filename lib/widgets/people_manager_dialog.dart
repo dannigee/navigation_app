@@ -6,6 +6,7 @@ import '../models/position.dart';
 import '../services/people_store.dart';
 import '../services/preset_name_store.dart';
 import '../utils/height_utils.dart';
+import '../utils/label_utils.dart';
 import '../utils/preset_resolver.dart';
 
 class PeopleManagerDialog extends StatefulWidget {
@@ -365,9 +366,7 @@ class _PeopleManagerDialogState extends State<PeopleManagerDialog> {
             for (var n = 1; n <= 100; n++)
               DropdownMenuItem<int?>(
                 value: n,
-                child: Text(presetNames[n - 1] != null
-                    ? '${presetNames[n - 1]} ($n)'
-                    : '$n'),
+                child: Text(formatItemLabel(presetNames[n - 1], '$n')),
               ),
           ],
           onChanged: onChanged,
@@ -400,9 +399,10 @@ class _PeopleManagerDialogState extends State<PeopleManagerDialog> {
                   );
             final heightDefaultLabel = heightDefault == null
                 ? null
-                : (_presetNamesByCamera[ip]?[heightDefault] != null
-                    ? '${_presetNamesByCamera[ip]![heightDefault]} (${heightDefault + 1})'
-                    : 'preset ${heightDefault + 1}');
+                : formatItemLabel(
+                    _presetNamesByCamera[ip]?[heightDefault],
+                    '${heightDefault + 1}',
+                    fallback: 'preset ${heightDefault + 1}');
             return Padding(
               padding: const EdgeInsets.only(bottom: 6),
               child: Column(

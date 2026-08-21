@@ -13,7 +13,11 @@ enum ItemVisibility { visible, hidden }
 /// and 1-based macro number / 0-based preset index — same keying convention
 /// as [PresetNameStore].
 class VisibilityStore {
-  static String _key(String deviceKey) => 'item_visibility_$deviceKey';
+  /// Prefix namespacing visibility entries in SharedPreferences -- exposed
+  /// so other code (e.g. ConfigBundle export) can enumerate the raw keys.
+  static const keyPrefix = 'item_visibility_';
+
+  static String _key(String deviceKey) => '$keyPrefix$deviceKey';
 
   /// Maps names from the old three-tier enum (`hide`/`expanded`/`basic`) to
   /// their binary equivalent, so data saved before that enum collapsed to
@@ -52,6 +56,17 @@ class VisibilityStore {
     existing[itemIndex] = visibility;
     await prefs.setString(_key(deviceKey),
         jsonEncode(existing.map((k, v) => MapEntry('$k', v.name))));
+    changes.value++;
+  }
+
+  /// Writes an already-encoded itemIndex→visibility-name JSON map straight
+  /// under [deviceKey] -- for bulk writers (e.g. a ConfigBundle import) that
+  /// don't go through [save]'s per-item read-modify-write. Bumps [changes]
+  /// the same as [save] does, so this is the one choke point any writer of
+  /// this key needs to go through to keep already-mounted listeners in sync.
+  static Future<void> saveRawJson(String deviceKey, String rawJson) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(_key(deviceKey), rawJson);
     changes.value++;
   }
 }

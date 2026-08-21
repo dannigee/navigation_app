@@ -5,6 +5,7 @@ import '../models/position.dart';
 import '../services/height_range_store.dart';
 import '../services/preset_name_store.dart';
 import '../utils/height_utils.dart';
+import '../utils/label_utils.dart';
 
 class HeightRangeManagerDialog extends StatefulWidget {
   final List<Position> positions;
@@ -386,9 +387,7 @@ class _HeightRangeManagerDialogState extends State<HeightRangeManagerDialog> {
             for (var n = 1; n <= 100; n++)
               DropdownMenuItem<int?>(
                 value: n,
-                child: Text(presetNames[n - 1] != null
-                    ? '${presetNames[n - 1]} ($n)'
-                    : '$n'),
+                child: Text(formatItemLabel(presetNames[n - 1], '$n')),
               ),
           ],
           onChanged: onChanged,

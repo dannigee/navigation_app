@@ -4,6 +4,7 @@ import '../models/position.dart';
 import '../models/service.dart';
 import '../services/preset_name_store.dart';
 import '../services/service_store.dart';
+import '../utils/label_utils.dart';
 
 class _WorkingParticipant {
   String id;
@@ -62,8 +63,11 @@ class _ServiceManagerDialogState extends State<ServiceManagerDialog> {
   List<_WorkingParticipant> _editingParticipants = [];
   List<_WorkingStep> _editingSteps = [];
 
-  Map<int, String> _macroNames = {};
-  Map<String, Map<int, String>> _cameraPresetNames = {};
+  // Cached dropdown item lists (100 entries each), rebuilt only when the
+  // underlying preset names change rather than on every step's build --
+  // every step in the service shares the same items for a given camera.
+  List<DropdownMenuItem<int?>> _macroDropdownItems = const [];
+  Map<String, List<DropdownMenuItem<int?>>> _presetDropdownItemsByCamera = {};
 
   @override
   void initState() {
@@ -86,18 +90,36 @@ class _ServiceManagerDialogState extends State<ServiceManagerDialog> {
 
   Future<void> _loadPresetNames() async {
     final rolandKey = 'roland_${widget.rolandIpController?.text ?? ''}';
-    final macroNames = await PresetNameStore.loadAll(rolandKey);
-    final cameraNames = <String, Map<int, String>>{};
-    for (final cam in widget.cameras) {
-      cameraNames[cam.ipController.text] =
-          await PresetNameStore.loadAll(cam.ipController.text);
-    }
+    final cameraIps = widget.cameras.map((c) => c.ipController.text).toList();
+    final results = await Future.wait([
+      PresetNameStore.loadAll(rolandKey),
+      ...cameraIps.map(PresetNameStore.loadAll),
+    ]);
+    final macroNames = results.first;
+    final cameraNames = <String, Map<int, String>>{
+      for (var i = 0; i < cameraIps.length; i++) cameraIps[i]: results[i + 1],
+    };
     if (mounted) {
       setState(() {
-        _macroNames = macroNames;
-        _cameraPresetNames = cameraNames;
+        _macroDropdownItems = _numberDropdownItems((n) => macroNames[n]);
+        _presetDropdownItemsByCamera = {
+          for (final entry in cameraNames.entries)
+            entry.key: _numberDropdownItems((n) => entry.value[n - 1]),
+        };
       });
     }
+  }
+
+  static List<DropdownMenuItem<int?>> _numberDropdownItems(
+      String? Function(int displayNumber) nameFor) {
+    return [
+      const DropdownMenuItem<int?>(value: null, child: Text('—')),
+      for (var n = 1; n <= 100; n++)
+        DropdownMenuItem<int?>(
+          value: n,
+          child: Text(formatItemLabel(nameFor(n), '$n')),
+        ),
+    ];
   }
 
   void _startEditing(Service service) {
@@ -113,14 +135,20 @@ class _ServiceManagerDialogState extends State<ServiceManagerDialog> {
           type: s.type,
           participantId: s.participantId,
           positionId: s.positionId,
-          macroNumber: s.macroNumber,
+          // The Macro #/Preset # dropdowns only offer 1-100, so a value
+          // outside that range (e.g. from a hand-edited or older config
+          // bundle) is treated as unset rather than crashing the dropdown.
+          macroNumber: _inRange(s.macroNumber, 1, 100),
           cameraIp: s.cameraIp,
-          cameraPresetIndex: s.cameraPresetIndex,
+          cameraPresetIndex: _inRange(s.cameraPresetIndex, 0, 99),
           subServiceId: s.subServiceId,
         )).toList();
 
     setState(() => _editingService = service);
   }
+
+  static int? _inRange(int? value, int min, int max) =>
+      (value != null && value >= min && value <= max) ? value : null;
 
   void _addNewService() =>
       _startEditing(Service(id: generateServiceId(), name: ''));
@@ -496,20 +524,11 @@ class _ServiceManagerDialogState extends State<ServiceManagerDialog> {
         return _dropdown<int?>(
           hint: 'Macro #',
           value: s.macroNumber,
-          items: [
-            const DropdownMenuItem<int?>(value: null, child: Text('—')),
-            for (var n = 1; n <= 100; n++)
-              DropdownMenuItem<int?>(
-                value: n,
-                child: Text(
-                    _macroNames[n] != null ? '${_macroNames[n]} ($n)' : '$n'),
-              ),
-          ],
+          items: _macroDropdownItems,
           onChanged: (v) => setState(() => s.macroNumber = v),
         );
 
       case StepType.shot:
-        final presetNames = _cameraPresetNames[s.cameraIp] ?? const {};
         return Row(
           children: [
             Expanded(
@@ -531,16 +550,8 @@ class _ServiceManagerDialogState extends State<ServiceManagerDialog> {
                 hint: 'Preset #',
                 value:
                     s.cameraPresetIndex == null ? null : s.cameraPresetIndex! + 1,
-                items: [
-                  const DropdownMenuItem<int?>(value: null, child: Text('—')),
-                  for (var n = 1; n <= 100; n++)
-                    DropdownMenuItem<int?>(
-                      value: n,
-                      child: Text(presetNames[n - 1] != null
-                          ? '${presetNames[n - 1]} ($n)'
-                          : '$n'),
-                    ),
-                ],
+                items: _presetDropdownItemsByCamera[s.cameraIp] ??
+                    _numberDropdownItems((_) => null),
                 onChanged: (v) => setState(
                     () => s.cameraPresetIndex = v == null ? null : v - 1),
               ),

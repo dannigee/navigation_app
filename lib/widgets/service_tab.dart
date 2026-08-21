@@ -7,6 +7,7 @@ import '../models/position.dart';
 import '../models/service.dart';
 import '../services/abstract/roland_service_abstract.dart';
 import '../services/preset_name_store.dart';
+import '../utils/label_utils.dart';
 import '../utils/preset_resolver.dart';
 
 class _FlatStep {
@@ -84,12 +85,15 @@ class _ServiceTabState extends State<ServiceTab> {
       widget.cameras.map((c) => c.ipController.text).toSet();
 
   Future<void> _loadNames() async {
-    final roland = await PresetNameStore.loadAll(_rolandKey);
-    final cameraNames = <String, Map<int, String>>{};
-    for (final cam in widget.cameras) {
-      cameraNames[cam.ipController.text] =
-          await PresetNameStore.loadAll(cam.ipController.text);
-    }
+    final cameraIps = widget.cameras.map((c) => c.ipController.text).toList();
+    final results = await Future.wait([
+      PresetNameStore.loadAll(_rolandKey),
+      ...cameraIps.map(PresetNameStore.loadAll),
+    ]);
+    final roland = results.first;
+    final cameraNames = <String, Map<int, String>>{
+      for (var i = 0; i < cameraIps.length; i++) cameraIps[i]: results[i + 1],
+    };
     if (mounted) {
       setState(() {
         _rolandNames = roland;
@@ -100,19 +104,16 @@ class _ServiceTabState extends State<ServiceTab> {
 
   /// "name (N)" for macro [macroNumber] if a custom name is saved, otherwise
   /// just "Macro N".
-  String _macroLabel(int macroNumber) {
-    final name = _rolandNames[macroNumber];
-    return (name == null || name.isEmpty)
-        ? 'Macro $macroNumber'
-        : '$name ($macroNumber)';
-  }
+  String _macroLabel(int macroNumber) => formatItemLabel(
+      _rolandNames[macroNumber], '$macroNumber',
+      fallback: 'Macro $macroNumber');
 
   /// "name (N)" for [presetIndex] (0-based) on [cameraIp] if a custom name is
   /// saved, otherwise just "Preset N" (1-based).
   String _presetLabel(String cameraIp, int presetIndex) {
     final n = presetIndex + 1;
-    final name = _cameraNames[cameraIp]?[presetIndex];
-    return (name == null || name.isEmpty) ? 'Preset $n' : '$name ($n)';
+    return formatItemLabel(_cameraNames[cameraIp]?[presetIndex], '$n',
+        fallback: 'Preset $n');
   }
 
   Service? get _selectedService => _selectedServiceId == null

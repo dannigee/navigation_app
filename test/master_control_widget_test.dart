@@ -7,6 +7,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:navigation_app/models/controllable_device.dart';
 import 'package:navigation_app/models/service.dart';
 import 'package:navigation_app/services/preset_name_store.dart';
+import 'package:navigation_app/services/visibility_store.dart';
 import 'package:navigation_app/widgets/master_control_widget.dart';
 
 /// A minimal [ControllableDevice] whose [saveName] can be held open on
@@ -23,6 +24,9 @@ class _GatedDevice extends ControllableDevice {
 
   Completer<void>? saveNameGate;
   final List<String> saveNameCalls = [];
+
+  Completer<void>? saveVisibilityGate;
+  final List<String> saveVisibilityCalls = [];
 
   @override
   bool get isConnected => true;
@@ -58,6 +62,14 @@ class _GatedDevice extends ControllableDevice {
     if (saveNameGate != null) await saveNameGate!.future;
     saveNameCalls.add('resolve:$index:$name');
     await super.saveName(index, name);
+  }
+
+  @override
+  Future<void> saveVisibility(int index, ItemVisibility visibility) async {
+    saveVisibilityCalls.add('start:$index:${visibility.name}');
+    if (saveVisibilityGate != null) await saveVisibilityGate!.future;
+    saveVisibilityCalls.add('resolve:$index:${visibility.name}');
+    await super.saveVisibility(index, visibility);
   }
 }
 
@@ -182,6 +194,39 @@ void main() {
     expect(find.text('— Opening Wide (1)'), findsOneWidget);
   });
 
+  testWidgets(
+      'submitting the field without editing does not save the prefilled '
+      'default label as a real custom name', (tester) async {
+    await tester.pumpWidget(_build());
+    await tester.pumpAndSettle();
+    await _selectMacro(tester, 'Macro 1');
+
+    // Focus the field (without changing its text) then submit -- the field
+    // still holds the unedited prefill.
+    await tester.tap(find.byType(TextField).first);
+    await tester.pump();
+    await tester.testTextInput.receiveAction(TextInputAction.done);
+    await tester.pump();
+
+    expect((await PresetNameStore.loadAll('roland_'))[1], isNull);
+  });
+
+  testWidgets(
+      'submitting the field without editing an already-named item does not '
+      're-save it', (tester) async {
+    await PresetNameStore.save('roland_', 1, 'Opening Wide');
+    await tester.pumpWidget(_build());
+    await tester.pumpAndSettle();
+    await _selectMacro(tester, 'Opening Wide (1)');
+
+    await tester.tap(find.byType(TextField).first);
+    await tester.pump();
+    await tester.testTextInput.receiveAction(TextInputAction.done);
+    await tester.pump();
+
+    expect((await PresetNameStore.loadAll('roland_'))[1], 'Opening Wide');
+  });
+
   group('race conditions between an in-flight save and a switch', () {
     testWidgets(
         'a rename still saving when the device is switched updates the '
@@ -278,6 +323,55 @@ void main() {
       expect(device.saveNameCalls,
           ['start:1:First', 'resolve:1:First', 'start:1:Second', 'resolve:1:Second']);
       expect((await PresetNameStore.loadAll('device_a'))[1], 'Second');
+    });
+
+    testWidgets(
+        'a visibility save that is still in flight is never overtaken by '
+        'the next one for the same item', (tester) async {
+      final device = _GatedDevice('A', 'device_a');
+      final gate = Completer<void>();
+      device.saveVisibilityGate = gate;
+
+      await tester.pumpWidget(MaterialApp(
+        home: Scaffold(
+          body: MasterControlWidget(
+            rolandService: null,
+            rolandConnected: ValueNotifier(false),
+            cameras: const [],
+            onResponse: (_) {},
+            devicesOverride: [device],
+          ),
+        ),
+      ));
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.text('Edit Mode'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('A Item 1'));
+      await tester.pumpAndSettle();
+
+      // Toggle to Hidden -- blocks on `gate`, still in flight.
+      await tester.tap(find.text('Hidden'));
+      await tester.pump();
+      expect(device.saveVisibilityCalls, ['start:1:hidden']);
+
+      // Toggling back to Visible immediately must not start until the
+      // first save has fully resolved.
+      await tester.tap(find.text('Visible'));
+      await tester.pump();
+      expect(device.saveVisibilityCalls, ['start:1:hidden']);
+
+      gate.complete();
+      await tester.pumpAndSettle();
+
+      expect(device.saveVisibilityCalls, [
+        'start:1:hidden',
+        'resolve:1:hidden',
+        'start:1:visible',
+        'resolve:1:visible',
+      ]);
+      expect((await VisibilityStore.loadAll('device_a'))[1],
+          ItemVisibility.visible);
     });
   });
 }

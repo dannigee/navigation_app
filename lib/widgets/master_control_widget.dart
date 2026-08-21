@@ -7,6 +7,7 @@ import '../models/roland_device.dart';
 import '../models/panasonic_device.dart';
 import '../services/abstract/roland_service_abstract.dart';
 import '../services/visibility_store.dart';
+import '../utils/label_utils.dart';
 
 class MasterControlWidget extends StatefulWidget {
   final RolandServiceAbstract? rolandService;
@@ -48,6 +49,12 @@ class _MasterControlWidgetState extends State<MasterControlWidget> {
   final TextEditingController _renameController = TextEditingController();
   final List<VoidCallback> _deviceListeners = [];
   Timer? _renameDebounce;
+
+  // What the rename field held right after selection (or the last successful
+  // save), so a submit that doesn't actually change anything -- e.g. the
+  // field is only prefilled with the default label -- is a no-op instead of
+  // persisting that prefill as a real custom name.
+  String? _lastKnownName;
 
   // Serializes every name-save so a flush and the autosave it preempted (or
   // two autosaves for different items in quick succession) always persist
@@ -152,6 +159,7 @@ class _MasterControlWidgetState extends State<MasterControlWidget> {
       _selectedDeviceIndex = index;
       _selectedItemIndex = null;
       _renameController.clear();
+      _lastKnownName = null;
       _selectedVisibility = ItemVisibility.visible;
     });
     _loadDeviceMetadata(index);
@@ -172,9 +180,11 @@ class _MasterControlWidgetState extends State<MasterControlWidget> {
     final device = _devices[_selectedDeviceIndex];
     final names = _namesByDevice[_selectedDeviceIndex] ?? {};
     final visibility = _visibilityByDevice[_selectedDeviceIndex] ?? {};
+    final label = names[index] ?? device.defaultLabel(index);
     setState(() {
       _selectedItemIndex = index;
-      _renameController.text = names[index] ?? device.defaultLabel(index);
+      _renameController.text = label;
+      _lastKnownName = label;
       _selectedVisibility = visibility[index] ?? ItemVisibility.visible;
     });
   }
@@ -195,12 +205,23 @@ class _MasterControlWidgetState extends State<MasterControlWidget> {
     final device = _devices[deviceIndex];
     final index = _selectedItemIndex!;
     final name = _renameController.text.trim();
+    // Nothing to do if the field still holds what it was prefilled with (or
+    // what was last saved) -- otherwise submitting an unedited field would
+    // persist the default label as if it were a deliberate custom name.
+    if (name == _lastKnownName) return;
     await _enqueueSave(() => device.saveName(index, name));
     final names = await device.loadNames();
     // Written into the device that was active when this save was kicked
     // off, not whichever device happens to be selected now -- the user may
     // have switched devices while the save/reload above were in flight.
-    if (mounted) setState(() => _namesByDevice[deviceIndex] = names);
+    if (mounted) {
+      setState(() {
+        _namesByDevice[deviceIndex] = names;
+        if (deviceIndex == _selectedDeviceIndex && index == _selectedItemIndex) {
+          _lastKnownName = name;
+        }
+      });
+    }
     widget.onResponse(
         '${device.describe(index)} renamed to "${name.isEmpty ? "(cleared)" : name}"');
   }
@@ -211,7 +232,7 @@ class _MasterControlWidgetState extends State<MasterControlWidget> {
     final device = _devices[deviceIndex];
     final index = _selectedItemIndex!;
     setState(() => _selectedVisibility = visibility);
-    await device.saveVisibility(index, visibility);
+    await _enqueueSave(() => device.saveVisibility(index, visibility));
     final stored = await device.loadVisibility();
     if (mounted) setState(() => _visibilityByDevice[deviceIndex] = stored);
   }
@@ -223,10 +244,8 @@ class _MasterControlWidgetState extends State<MasterControlWidget> {
   String? _captionLabel(ControllableDevice device, Map<int, String> names) {
     final i = _selectedItemIndex;
     if (i == null) return null;
-    final custom = names[i];
-    return (custom == null || custom.isEmpty)
-        ? device.describe(i)
-        : '$custom (${device.numberSuffix(i)})';
+    return formatItemLabel(names[i], device.numberSuffix(i),
+        fallback: device.describe(i));
   }
 
   @override

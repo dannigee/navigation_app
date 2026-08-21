@@ -1068,6 +1068,61 @@ void main() {
       expect(saved.single.steps.single.cameraPresetIndex, 3);
     });
 
+    testWidgets(
+        'editing a service with an out-of-range stored macro number does '
+        'not crash the dropdown', (tester) async {
+      await ServiceStore.saveAll([
+        Service(
+          id: 's1',
+          name: 'Legacy',
+          steps: [
+            const ServiceStep(
+                id: 'st1', type: StepType.macro, macroNumber: 150),
+          ],
+        ),
+      ]);
+      await _open(
+          tester,
+          (_) => ServiceManagerDialog(
+              positions: const [], cameras: const [], onSaved: () {}));
+
+      await tester.tap(find.byIcon(Icons.edit));
+      await tester.pumpAndSettle();
+
+      expect(tester.takeException(), isNull);
+      // Out-of-range value is treated as unset rather than kept invalid.
+      expect(find.text('150'), findsNothing);
+    });
+
+    testWidgets(
+        'editing a service with an out-of-range stored preset index does '
+        'not crash the dropdown', (tester) async {
+      final cam = PanasonicCameraConfig(name: 'Cam 1', ipAddress: '10.0.1.10');
+      addTearDown(cam.dispose);
+      await ServiceStore.saveAll([
+        Service(
+          id: 's1',
+          name: 'Legacy',
+          steps: [
+            const ServiceStep(
+                id: 'st1',
+                type: StepType.shot,
+                cameraIp: '10.0.1.10',
+                cameraPresetIndex: 250),
+          ],
+        ),
+      ]);
+      await _open(
+          tester,
+          (_) => ServiceManagerDialog(
+              positions: const [], cameras: [cam], onSaved: () {}));
+
+      await tester.tap(find.byIcon(Icons.edit));
+      await tester.pumpAndSettle();
+
+      expect(tester.takeException(), isNull);
+    });
+
     testWidgets('can add and remove a participant inline', (tester) async {
       await _open(
           tester,

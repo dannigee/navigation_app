@@ -3,6 +3,7 @@ import '../models/operator_profile.dart';
 import '../models/panasonic_camera_config.dart';
 import '../services/operator_store.dart';
 import '../services/preset_name_store.dart';
+import '../utils/label_utils.dart';
 
 class OperatorManagerDialog extends StatefulWidget {
   /// Storage key for the Roland device, e.g. `roland_10.0.1.20`.
@@ -164,9 +165,7 @@ class _OperatorManagerDialogState extends State<OperatorManagerDialog> {
   String _labelFor(String key, int index) {
     final defaultLabel =
         key == widget.rolandStorageKey ? 'M$index' : '${index + 1}';
-    final custom = _namesByKey[key]?[index];
-    if (custom == null || custom.isEmpty) return defaultLabel;
-    return '$custom ($defaultLabel)';
+    return formatItemLabel(_namesByKey[key]?[index], defaultLabel);
   }
 
   // ── Build ────────────────────────────────────────────────────────────────
