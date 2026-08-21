@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import '../models/panasonic_camera_config.dart';
 import '../models/controllable_device.dart';
@@ -38,6 +40,7 @@ class _MasterControlWidgetState extends State<MasterControlWidget> {
 
   final TextEditingController _renameController = TextEditingController();
   final List<VoidCallback> _deviceListeners = [];
+  Timer? _renameDebounce;
 
   @override
   void initState() {
@@ -56,9 +59,22 @@ class _MasterControlWidgetState extends State<MasterControlWidget> {
 
   @override
   void dispose() {
+    _flushPendingRename();
     _removeDeviceListeners();
     _renameController.dispose();
     super.dispose();
+  }
+
+  /// Persists a still-pending debounced rename immediately -- called before
+  /// the selection/device changes out from under it, and on dispose.
+  void _flushPendingRename() {
+    if (_renameDebounce?.isActive ?? false) {
+      _renameDebounce!.cancel();
+      if (_selectedItemIndex != null) {
+        _devices[_selectedDeviceIndex]
+            .saveName(_selectedItemIndex!, _renameController.text.trim());
+      }
+    }
   }
 
   void _setupDeviceListeners() {
@@ -108,6 +124,7 @@ class _MasterControlWidgetState extends State<MasterControlWidget> {
   }
 
   void _onDeviceSelected(int index) {
+    _flushPendingRename();
     setState(() {
       _selectedDeviceIndex = index;
       _selectedItemIndex = null;
@@ -128,6 +145,7 @@ class _MasterControlWidgetState extends State<MasterControlWidget> {
   }
 
   void _selectItem(int index) {
+    _flushPendingRename();
     final names = _namesByDevice[_selectedDeviceIndex] ?? {};
     final visibility = _visibilityByDevice[_selectedDeviceIndex] ?? {};
     setState(() {
@@ -135,6 +153,16 @@ class _MasterControlWidgetState extends State<MasterControlWidget> {
       _renameController.text = names[index] ?? '';
       _selectedVisibility = visibility[index] ?? ItemVisibility.visible;
     });
+  }
+
+  void _onRenameChanged(String _) {
+    _renameDebounce?.cancel();
+    _renameDebounce = Timer(const Duration(milliseconds: 500), _saveRename);
+  }
+
+  void _onRenameSubmitted(String _) {
+    _renameDebounce?.cancel();
+    _saveRename();
   }
 
   Future<void> _saveRename() async {
@@ -254,25 +282,16 @@ class _MasterControlWidgetState extends State<MasterControlWidget> {
                 child: Text('Tap a button above to select it for renaming',
                     style: TextStyle(color: Colors.grey, fontSize: 12)),
               ),
-            Row(
-              children: [
-                Expanded(
-                  child: TextField(
-                    controller: _renameController,
-                    enabled: _selectedItemIndex != null,
-                    decoration: const InputDecoration(
-                      labelText: 'Name',
-                      border: OutlineInputBorder(),
-                      isDense: true,
-                    ),
-                  ),
-                ),
-                const SizedBox(width: 8),
-                ElevatedButton(
-                  onPressed: _selectedItemIndex != null ? _saveRename : null,
-                  child: const Text('Save Name'),
-                ),
-              ],
+            TextField(
+              controller: _renameController,
+              enabled: _selectedItemIndex != null,
+              onChanged: _onRenameChanged,
+              onSubmitted: _onRenameSubmitted,
+              decoration: const InputDecoration(
+                labelText: 'Name',
+                border: OutlineInputBorder(),
+                isDense: true,
+              ),
             ),
             const SizedBox(height: 12),
             const Text('Visibility',
