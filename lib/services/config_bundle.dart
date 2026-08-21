@@ -270,9 +270,17 @@ class ConfigBundle {
       throw UnsupportedError('File import is not supported on web');
     }
     final content = await File(path).readAsString();
-    final json = jsonDecode(content);
+    final dynamic json;
+    try {
+      json = jsonDecode(content);
+    } on FormatException catch (e) {
+      throw AppFault.backup(BackupFailureKind.malformedRemote,
+          'could not decode configuration file: $e',
+          cause: e);
+    }
     if (json is! Map<String, dynamic>) {
-      throw const FormatException('Not a valid configuration file');
+      throw AppFault.backup(BackupFailureKind.malformedRemote,
+          'configuration file root must be an object');
     }
     return ConfigBundle.fromJsonValidated(json);
   }

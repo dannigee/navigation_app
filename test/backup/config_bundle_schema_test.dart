@@ -1,3 +1,5 @@
+import 'dart:io';
+
 import 'package:flutter_test/flutter_test.dart';
 import 'package:navigation_app/services/backup/app_fault.dart';
 import 'package:navigation_app/services/config_bundle.dart';
@@ -13,6 +15,15 @@ Map<String, dynamic> valid([Map<String, dynamic> extra = const {}]) => {
 
 Matcher throwsKind(BackupFailureKind k) => throwsA(
     predicate((e) => e is AppFault && e.kind == k.name, 'AppFault ${k.name}'));
+
+Future<File> importFile(String content) async {
+  final file = await File(
+          '${Directory.systemTemp.path}/config_bundle_schema_${DateTime.now().microsecondsSinceEpoch}.json')
+      .create();
+  addTearDown(() => file.delete());
+  await file.writeAsString(content);
+  return file;
+}
 
 void main() {
   group('version', () {
@@ -109,5 +120,38 @@ void main() {
     final again = ConfigBundle.fromJsonValidated(original.toJson());
     expect(again.schemaVersion, original.schemaVersion);
     expect(again.positions.length, original.positions.length);
+  });
+
+  group('manual import', () {
+    test('invalid JSON syntax is malformedRemote', () async {
+      final file = await importFile('{not JSON');
+
+      await expectLater(ConfigBundle.readFromPath(file.path),
+          throwsKind(BackupFailureKind.malformedRemote));
+    });
+
+    test('a list top-level value is malformedRemote', () async {
+      final file = await importFile('[]');
+
+      await expectLater(ConfigBundle.readFromPath(file.path),
+          throwsKind(BackupFailureKind.malformedRemote));
+    });
+
+    test('a scalar top-level value is malformedRemote', () async {
+      final file = await importFile('1');
+
+      await expectLater(ConfigBundle.readFromPath(file.path),
+          throwsKind(BackupFailureKind.malformedRemote));
+    });
+
+    test('a valid document parses from its file path', () async {
+      final file = await importFile(
+          '{"schemaVersion":1,"positions":[],"people":[],"services":[],"heightRanges":[]}');
+
+      final bundle = await ConfigBundle.readFromPath(file.path);
+
+      expect(bundle.schemaVersion, ConfigBundle.currentSchemaVersion);
+      expect(bundle.positions, isEmpty);
+    });
   });
 }
