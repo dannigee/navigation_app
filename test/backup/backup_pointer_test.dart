@@ -18,6 +18,21 @@ class _RefuseHashWriteStore extends InMemorySharedPreferencesStore {
   }
 }
 
+class _AlwaysRefuseRevisionWriteStore extends InMemorySharedPreferencesStore {
+  _AlwaysRefuseRevisionWriteStore()
+      : super.withData({
+          'flutter.${BackupPointer.revisionKey}': 'old-rev',
+          'flutter.${BackupPointer.hashKey}': 'old-hash',
+          'flutter.${BackupPointer.targetKey}': 'folder-A',
+        });
+
+  @override
+  Future<bool> setValue(String valueType, String key, Object value) async {
+    if (key == 'flutter.${BackupPointer.revisionKey}') return false;
+    return super.setValue(valueType, key, value);
+  }
+}
+
 void main() {
   setUp(() => SharedPreferences.setMockInitialValues({}));
 
@@ -81,5 +96,25 @@ void main() {
     expect(pointer.recordedHash, 'old-hash');
     expect(pointer.targetIdentity, 'folder-A',
         reason: 'a refused pointer save must leave every field all-old');
+  });
+
+  test('persistent revision refusal still rolls supporting fields all-old',
+      () async {
+    SharedPreferences.resetStatic();
+    SharedPreferencesStorePlatform.instance = _AlwaysRefuseRevisionWriteStore();
+    addTearDown(() => SharedPreferences.setMockInitialValues({}));
+
+    await expectLater(
+      BackupPointer.save(
+          revisionId: 'new-rev',
+          recordedHash: 'new-hash',
+          targetIdentity: 'folder-B'),
+      throwsA(isA<StateError>()),
+    );
+
+    final pointer = await BackupPointer.load();
+    expect(pointer.revisionId, 'old-rev');
+    expect(pointer.recordedHash, 'old-hash');
+    expect(pointer.targetIdentity, 'folder-A');
   });
 }

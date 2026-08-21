@@ -60,14 +60,27 @@ class BackupPointer {
           prefs.setString(revisionKey, revisionId), prefs, 'revision');
     } on StateError catch (error, stackTrace) {
       try {
-        for (final entry in previous.entries) {
-          final oldValue = entry.value;
+        // Restore supporting fields first. A refused final revision write
+        // leaves the old revision in place, so retrying that known-refused
+        // write before hash/target would strand a half-new pointer.
+        for (final key in [hashKey, targetKey]) {
+          final oldValue = previous[key];
           await _requirePersisted(
             oldValue == null
-                ? prefs.remove(entry.key)
-                : prefs.setString(entry.key, oldValue),
+                ? prefs.remove(key)
+                : prefs.setString(key, oldValue),
             prefs,
-            'rollback for ${entry.key}',
+            'rollback for $key',
+          );
+        }
+        final oldRevision = previous[revisionKey];
+        if (prefs.getString(revisionKey) != oldRevision) {
+          await _requirePersisted(
+            oldRevision == null
+                ? prefs.remove(revisionKey)
+                : prefs.setString(revisionKey, oldRevision),
+            prefs,
+            'rollback for $revisionKey',
           );
         }
       } on StateError catch (rollbackError) {

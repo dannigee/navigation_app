@@ -11,15 +11,17 @@ import 'package:shared_preferences_platform_interface/shared_preferences_platfor
 const identity = 'folder-A';
 
 class _RefusePointerWriteStore extends InMemorySharedPreferencesStore {
-  _RefusePointerWriteStore(Map<String, Object> values, this.refuseKey)
+  _RefusePointerWriteStore(Map<String, Object> values, this.refuseKey,
+      {this.alwaysRefuse = false})
       : super.withData(values);
 
   final String refuseKey;
+  final bool alwaysRefuse;
   var refused = false;
 
   @override
   Future<bool> setValue(String valueType, String key, Object value) async {
-    if (key == refuseKey && !refused) {
+    if (key == refuseKey && (alwaysRefuse || !refused)) {
       refused = true;
       return false;
     }
@@ -240,5 +242,43 @@ void main() {
     expect(repaired.revisionId, target.revisions.last.id);
     expect(repaired.recordedHash, canonicalHash(doc('edited')));
     expect(await ConfigMutationNotifier.instance.isDirty(), isFalse);
+  });
+
+  test('persistent revision refusal never leaves push falsely synced',
+      () async {
+    final base = await target.put(
+      canonicalJsonEncode(doc()),
+      contentHash: canonicalHash(doc()),
+      parentRevisionId: null,
+      deviceLabel: 'Mac mini',
+    );
+    SharedPreferences.resetStatic();
+    SharedPreferencesStorePlatform.instance = _RefusePointerWriteStore(
+      {
+        'flutter.${ConfigMutationNotifier.generationKey}': 1,
+        'flutter.${BackupPointer.revisionKey}': base.id,
+        'flutter.${BackupPointer.hashKey}': canonicalHash(doc()),
+        'flutter.${BackupPointer.targetKey}': identity,
+      },
+      'flutter.${BackupPointer.revisionKey}',
+      alwaysRefuse: true,
+    );
+    addTearDown(() => SharedPreferences.setMockInitialValues({}));
+
+    Future<void> expectStorageFailure() async {
+      await expectLater(
+        service(doc('edited')).push(),
+        throwsA(isA<AppFault>().having((fault) => fault.kind, 'kind',
+            BackupFailureKind.storageWriteFailed.name)),
+      );
+      final pointer = await BackupPointer.load();
+      expect(pointer.revisionId, base.id);
+      expect(pointer.recordedHash, canonicalHash(doc()));
+      expect(pointer.targetIdentity, identity);
+      expect(await ConfigMutationNotifier.instance.isDirty(), isTrue);
+    }
+
+    await expectStorageFailure();
+    await expectStorageFailure();
   });
 }
