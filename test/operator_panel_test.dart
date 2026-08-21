@@ -225,6 +225,20 @@ void main() {
       expect(find.text('Macro 1'), findsNothing);
       expect(find.text('Macro 2'), findsOneWidget);
     });
+
+    testWidgets(
+        'an already-mounted panel hides an item as soon as it is saved '
+        'elsewhere, without switching devices or rebuilding',
+        (tester) async {
+      await tester.pumpWidget(_build());
+      await tester.pumpAndSettle();
+      expect(find.text('Macro 1'), findsOneWidget);
+
+      await VisibilityStore.save('roland_', 1, ItemVisibility.hidden);
+      await tester.pumpAndSettle();
+
+      expect(find.text('Macro 1'), findsNothing);
+    });
   });
 
   group('OperatorPanel — recording', () {
