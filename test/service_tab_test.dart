@@ -604,4 +604,77 @@ void main() {
       expect(response, 'Opening Wide (3) executed');
     });
   });
+
+  group('ServiceTab — reloading names when device config changes', () {
+    testWidgets(
+        'reloads names when the Roland IP changes while the tab stays mounted',
+        (tester) async {
+      final ipCtrl = TextEditingController(text: '10.0.1.20');
+      addTearDown(ipCtrl.dispose);
+      final service = Service(
+        id: 's1',
+        name: 'Mass',
+        steps: [
+          const ServiceStep(id: 'st1', type: StepType.macro, macroNumber: 3),
+        ],
+      );
+
+      await tester.pumpWidget(_wrap(
+          _tab(services: [service], rolandIpController: ipCtrl)));
+      await tester.tap(find.byType(DropdownButton<String?>));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Mass').last);
+      await tester.pumpAndSettle();
+
+      expect(find.textContaining('Macro 3'), findsOneWidget);
+
+      // Simulate Settings -> Connections repointing at a different Roland,
+      // with a name already saved under the new IP's key, while this tab
+      // stays mounted (no full teardown/rebuild of ServiceTab itself).
+      await PresetNameStore.save('roland_10.0.1.30', 3, 'Opening Wide');
+      ipCtrl.text = '10.0.1.30';
+      await tester.pumpWidget(_wrap(
+          _tab(services: [service], rolandIpController: ipCtrl)));
+      await tester.pumpAndSettle();
+
+      expect(find.textContaining('Opening Wide (3)'), findsOneWidget);
+    });
+
+    testWidgets(
+        'reloads preset names when the camera list changes while the tab stays mounted',
+        (tester) async {
+      final service = Service(
+        id: 's1',
+        name: 'Mass',
+        steps: [
+          const ServiceStep(
+              id: 'st1',
+              type: StepType.shot,
+              cameraIp: '10.0.1.10',
+              cameraPresetIndex: 3),
+        ],
+      );
+
+      await tester
+          .pumpWidget(_wrap(_tab(services: [service], cameras: const [])));
+      await tester.tap(find.byType(DropdownButton<String?>));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Mass').last);
+      await tester.pumpAndSettle();
+
+      // No matching camera configured yet -> warning state.
+      expect(find.textContaining('Shot (not set)'), findsOneWidget);
+
+      // Simulate Settings -> Connections adding the camera this shot step
+      // already references, with a name already saved for its preset.
+      final cam = PanasonicCameraConfig(name: 'Cam 1', ipAddress: '10.0.1.10');
+      addTearDown(cam.dispose);
+      await PresetNameStore.save('10.0.1.10', 3, 'Cantor');
+      await tester
+          .pumpWidget(_wrap(_tab(services: [service], cameras: [cam])));
+      await tester.pumpAndSettle();
+
+      expect(find.textContaining('Cantor (4)'), findsOneWidget);
+    });
+  });
 }

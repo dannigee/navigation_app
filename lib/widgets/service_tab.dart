@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart' show setEquals;
 import 'package:flutter/material.dart';
 import '../models/height_range.dart';
 import '../models/panasonic_camera_config.dart';
@@ -66,15 +67,24 @@ class _ServiceTabState extends State<ServiceTab> {
   Map<int, String> _rolandNames = {};
   Map<String, Map<int, String>> _cameraNames = {};
 
+  String? _lastRolandKey;
+  Set<String>? _lastCameraIps;
+
   @override
   void initState() {
     super.initState();
+    _lastRolandKey = _rolandKey;
+    _lastCameraIps = _cameraIps;
     _loadNames();
   }
 
+  String get _rolandKey => 'roland_${widget.rolandIpController?.text ?? ''}';
+
+  Set<String> get _cameraIps =>
+      widget.cameras.map((c) => c.ipController.text).toSet();
+
   Future<void> _loadNames() async {
-    final rolandKey = 'roland_${widget.rolandIpController?.text ?? ''}';
-    final roland = await PresetNameStore.loadAll(rolandKey);
+    final roland = await PresetNameStore.loadAll(_rolandKey);
     final cameraNames = <String, Map<int, String>>{};
     for (final cam in widget.cameras) {
       cameraNames[cam.ipController.text] =
@@ -155,6 +165,18 @@ class _ServiceTabState extends State<ServiceTab> {
       _selectedServiceId = null;
       _currentStepIndex = null;
       _participantAssignments.clear();
+    }
+
+    // The parent loads the Roland IP and camera list asynchronously and can
+    // change them at any time (e.g. Settings -> Connections) while this tab
+    // stays mounted; reload names whenever the effective config actually
+    // changes rather than only once in initState.
+    final key = _rolandKey;
+    final ips = _cameraIps;
+    if (key != _lastRolandKey || !setEquals(ips, _lastCameraIps)) {
+      _lastRolandKey = key;
+      _lastCameraIps = ips;
+      _loadNames();
     }
   }
 
