@@ -337,6 +337,10 @@ class _MultiDeviceControlPageState extends State<MultiDeviceControlPage> {
               await _loadHeightRanges();
               setDialogState(() {});
             },
+            onPeopleChanged: () async {
+              await _loadPeople();
+              setDialogState(() {});
+            },
             onAllDataChanged: () async {
               await Future.wait([
                 _loadPositions(),

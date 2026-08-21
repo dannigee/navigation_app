@@ -110,14 +110,19 @@ void main() {
       expect(find.byIcon(Icons.person_add), findsOneWidget);
     });
 
-    testWidgets('Settings dialog no longer has a Manage People tile',
+    testWidgets(
+        'Settings dialog also has a Manage People tile, for setup discovery',
         (tester) async {
       await _connect(tester);
 
       await tester.tap(find.byIcon(Icons.settings));
       await tester.pumpAndSettle();
 
-      expect(find.text('Manage People'), findsNothing);
+      // The AppBar icon remains the fast path for the frequent case (a new
+      // person filling a role); this tile exists so Settings' Positions /
+      // Services / Height Ranges group doesn't leave People undiscoverable
+      // during initial setup.
+      expect(find.text('Manage People'), findsOneWidget);
     });
   });
 

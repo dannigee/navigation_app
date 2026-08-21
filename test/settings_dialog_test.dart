@@ -9,6 +9,7 @@ import 'package:navigation_app/widgets/settings_dialog.dart';
 Widget _settingsDialog({
   List<HeightRange> heightRanges = const [],
   VoidCallback? onHeightRangesChanged,
+  VoidCallback? onPeopleChanged,
 }) {
   return MaterialApp(
     theme: ThemeData(useMaterial3: false),
@@ -33,6 +34,7 @@ Widget _settingsDialog({
             onPositionsChanged: () {},
             onServicesChanged: () {},
             onHeightRangesChanged: onHeightRangesChanged ?? () {},
+            onPeopleChanged: onPeopleChanged ?? () {},
             onAllDataChanged: () {},
             onDeviceConfigSaved: (_, __) {},
             onOperatorsChanged: () {},
@@ -94,5 +96,27 @@ void main() {
     expect(changed, isTrue);
     final stored = await HeightRangeStore.loadAll();
     expect(stored.single.maxHeightCm, feetInchesToCm(5, 0));
+  });
+
+  testWidgets('shows a Manage People tile', (tester) async {
+    await tester.pumpWidget(_settingsDialog());
+    await tester.tap(find.text('Open'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Manage People'), findsOneWidget);
+  });
+
+  testWidgets('tapping the tile opens the PeopleManagerDialog',
+      (tester) async {
+    await tester.pumpWidget(_settingsDialog());
+    await tester.tap(find.text('Open'));
+    await tester.pumpAndSettle();
+
+    await tester.ensureVisible(find.text('Manage People'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Manage People'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Add Person'), findsOneWidget);
   });
 }
