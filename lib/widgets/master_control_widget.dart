@@ -15,6 +15,12 @@ class MasterControlWidget extends StatefulWidget {
   final List<PanasonicCameraConfig> cameras;
   final ValueChanged<String> onResponse;
 
+  /// Replaces the Roland/Panasonic devices normally built from the fields
+  /// above. Lets tests substitute fakes with controllable async timing to
+  /// exercise races between an in-flight save and a device/item switch.
+  @visibleForTesting
+  final List<ControllableDevice>? devicesOverride;
+
   const MasterControlWidget({
     super.key,
     required this.rolandService,
@@ -22,6 +28,7 @@ class MasterControlWidget extends StatefulWidget {
     required this.cameras,
     required this.onResponse,
     this.rolandIpController,
+    this.devicesOverride,
   });
 
   @override
@@ -56,14 +63,15 @@ class _MasterControlWidgetState extends State<MasterControlWidget> {
   @override
   void initState() {
     super.initState();
-    _devices = [
-      RolandDevice(
-        service: () => widget.rolandService,
-        connected: widget.rolandConnected ?? ValueNotifier(false),
-        ip: () => widget.rolandIpController?.text ?? '',
-      ),
-      ...widget.cameras.map(PanasonicDevice.new),
-    ];
+    _devices = widget.devicesOverride ??
+        [
+          RolandDevice(
+            service: () => widget.rolandService,
+            connected: widget.rolandConnected ?? ValueNotifier(false),
+            ip: () => widget.rolandIpController?.text ?? '',
+          ),
+          ...widget.cameras.map(PanasonicDevice.new),
+        ];
     _setupDeviceListeners();
     _loadDeviceMetadata(_selectedDeviceIndex);
   }
