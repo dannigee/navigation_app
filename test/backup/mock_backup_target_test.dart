@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 import 'package:flutter_test/flutter_test.dart';
 import 'package:navigation_app/services/backup/app_fault.dart';
 import 'package:navigation_app/services/backup/backup_revision.dart';
@@ -31,6 +33,14 @@ void main() {
   test('bodyChecksum is computed from the stored bytes, not supplied', () async {
     final rev = await put('{"a":1}');
     expect(rev.bodyChecksum, bodyChecksumOf('{"a":1}'));
+  });
+
+  test('sizeBytes counts stored UTF-8 bytes', () async {
+    const body = '{"name":"Beyoncé"}';
+    final rev = await put(body);
+
+    expect(rev.sizeBytes, utf8.encode(body).length);
+    expect(rev.sizeBytes, isNot(body.length));
   });
 
   test('put never overwrites: two puts make two revisions', () async {
@@ -93,7 +103,26 @@ void main() {
         greaterThanOrEqualTo(50));
   });
 
+  test('list rejects a negative limit with a backup AppFault', () async {
+    await expectLater(
+      target.list(limit: -1),
+      throwsA(isA<AppFault>()
+          .having((fault) => fault.domain, 'domain', FaultDomain.backup)
+          .having((fault) => fault.kind, 'kind', BackupFailureKind.unknown.name)),
+    );
+  });
+
   group('prune', () {
+    test('rejects a negative keepCount with a backup AppFault', () async {
+      await expectLater(
+        target.prune(keepCount: -1, keepFor: const Duration(days: 90)),
+        throwsA(isA<AppFault>()
+            .having((fault) => fault.domain, 'domain', FaultDomain.backup)
+            .having(
+                (fault) => fault.kind, 'kind', BackupFailureKind.unknown.name)),
+      );
+    });
+
     test('keeps a revision beyond keepCount when it is not yet old', () async {
       for (var i = 0; i < 5; i++) {
         await put('{"a":$i}');

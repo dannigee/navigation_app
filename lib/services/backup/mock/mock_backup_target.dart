@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 import '../abstract/backup_target_abstract.dart';
 import '../app_fault.dart';
 import '../backup_revision.dart';
@@ -78,7 +80,7 @@ class MockBackupTarget implements BackupTargetAbstract {
       contentHash: contentHash,
       bodyChecksum: bodyChecksumOf(json),
       parentRevisionId: parentRevisionId,
-      sizeBytes: json.length,
+      sizeBytes: utf8.encode(json).length,
       deviceLabel: deviceLabel,
     );
     revisions.add(rev);
@@ -120,6 +122,10 @@ class MockBackupTarget implements BackupTargetAbstract {
   @override
   Future<List<BackupRevision>> list({int limit = 50}) async {
     await _gate();
+    if (limit < 0) {
+      throw AppFault.backup(
+          BackupFailureKind.unknown, 'limit must not be negative');
+    }
     return _ordered().take(limit).toList();
   }
 
@@ -140,6 +146,10 @@ class MockBackupTarget implements BackupTargetAbstract {
     required Duration keepFor,
   }) async {
     await _gate();
+    if (keepCount < 0) {
+      throw AppFault.backup(
+          BackupFailureKind.unknown, 'keepCount must not be negative');
+    }
     final ordered = _ordered();
     final cutoff = _clock.subtract(keepFor);
     for (var i = keepCount; i < ordered.length; i++) {
