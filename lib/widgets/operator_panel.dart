@@ -45,10 +45,18 @@ class _OperatorPanelState extends State<OperatorPanel> {
   bool _isRecording = false;
   final List<ServiceStep> _recordedSteps = [];
 
+  // Each device's storageKey is dynamic (e.g. RolandDevice reads the IP via
+  // a closure), so it can change under an unchanged device instance -- e.g.
+  // Settings -> Connections mutating the shared TextEditingController.
+  // Tracked here so didUpdateWidget can tell the cached names/visibility
+  // apart from stale ones and reload.
+  late List<String> _lastStorageKeys;
+
   @override
   void initState() {
     super.initState();
     _buildDevices();
+    _lastStorageKeys = _devices.map((d) => d.storageKey).toList();
     _setupListeners();
     _loadNames(_selectedDeviceIndex);
     _loadVisibility(_selectedDeviceIndex);
@@ -71,6 +79,22 @@ class _OperatorPanelState extends State<OperatorPanel> {
   @override
   void didUpdateWidget(OperatorPanel old) {
     super.didUpdateWidget(old);
+    final keys = _devices.map((d) => d.storageKey).toList();
+    for (var i = 0; i < keys.length; i++) {
+      if (keys[i] != _lastStorageKeys[i]) {
+        // This device's effective storage key changed (e.g. the Roland IP
+        // was edited in Settings -> Connections) -- the cached names/hidden
+        // set were loaded under the old key, so drop them and reload if
+        // this device is the one currently on screen.
+        _namesByDevice.remove(i);
+        _hiddenByDevice.remove(i);
+        if (i == _selectedDeviceIndex) {
+          _loadNames(i);
+          _loadVisibility(i);
+        }
+      }
+    }
+    _lastStorageKeys = keys;
     setState(() {});
   }
 

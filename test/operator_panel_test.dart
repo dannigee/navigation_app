@@ -239,6 +239,42 @@ void main() {
 
       expect(find.text('Macro 1'), findsNothing);
     });
+
+    testWidgets(
+        'reloads visibility for the new Roland IP after it changes while '
+        'the panel stays mounted', (tester) async {
+      final ipController = TextEditingController(text: '10.0.1.20');
+      addTearDown(ipController.dispose);
+      await VisibilityStore.save('roland_10.0.1.20', 1, ItemVisibility.hidden);
+
+      Widget build() => MaterialApp(
+            theme: ThemeData(useMaterial3: false),
+            home: Scaffold(
+              body: OperatorPanel(
+                operator: OperatorProfile.defaultProfile,
+                rolandService: null,
+                rolandConnected: ValueNotifier(false),
+                rolandIpController: ipController,
+                cameras: const [],
+                onResponse: (_) {},
+              ),
+            ),
+          );
+
+      await tester.pumpWidget(build());
+      await tester.pumpAndSettle();
+      expect(find.text('Macro 1'), findsNothing);
+
+      // The Roland IP changes in place (mirrors Settings -> Connections
+      // mutating the same TextEditingController) while the panel is not
+      // rebuilt from scratch.
+      ipController.text = '10.0.1.30';
+      await tester.pumpWidget(build());
+      await tester.pumpAndSettle();
+
+      // The new IP has no saved visibility, so macro 1 should show again.
+      expect(find.text('Macro 1'), findsOneWidget);
+    });
   });
 
   group('OperatorPanel — recording', () {
