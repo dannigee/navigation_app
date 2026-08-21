@@ -1,10 +1,29 @@
 import 'dart:async';
+import 'dart:convert';
 
+import '../config_bundle.dart';
 import 'abstract/backup_target_abstract.dart';
+import 'app_fault.dart';
 import 'backup_pointer.dart';
 import 'backup_revision.dart';
 import 'canonical_json.dart';
 import 'config_mutation_notifier.dart';
+
+enum PullOutcome {
+  nothingToDo,
+  adopted,
+  applied,
+  rebased,
+  conflict,
+  targetEmptied,
+  needsAdoptionChoice,
+}
+
+class PullResult {
+  final PullOutcome outcome;
+  final BackupRevision? revision;
+  const PullResult(this.outcome, {this.revision});
+}
 
 enum PushOutcome { noOp, uploaded, conflict, forked }
 
@@ -61,6 +80,106 @@ class BackupService {
   Future<BackupPointer> _pointer() async {
     final p = await BackupPointer.load();
     return p.matchesTarget(targetIdentity) ? p : const BackupPointer();
+  }
+
+  Future<PullResult> pull() => _single(_pull);
+
+  Future<PullResult> _pull() async {
+    // 1. Metadata only. A pointer from another target is meaningless.
+    final head = await target.latest();
+    final pointer = await _pointer();
+
+    // 2. Remote empty.
+    if (head == null) {
+      if (!pointer.isProvenanced) {
+        return const PullResult(PullOutcome.nothingToDo);
+      }
+      await BackupPointer.clear();
+      return const PullResult(PullOutcome.targetEmptied);
+    }
+
+    final localBundle = await readBundleJson();
+    final localJson = canonicalJsonEncode(localBundle);
+    final localHash = canonicalHash(localBundle);
+    final localChecksum = bodyChecksumOf(localJson);
+
+    // 3. Unprovenanced. Never auto-apply over local data.
+    if (!pointer.isProvenanced) {
+      if (!await localIsPristine()) {
+        return PullResult(PullOutcome.needsAdoptionChoice, revision: head);
+      }
+      await _applyRevision(head);
+      return PullResult(PullOutcome.adopted, revision: head);
+    }
+
+    // 4. Remote has not moved.
+    if (head.id == pointer.revisionId) {
+      return const PullResult(PullOutcome.nothingToDo);
+    }
+
+    // 5. Equivalent content under another id. Judged by the SERVER checksum:
+    //    the contentHash at the target is client-written and goes stale if
+    //    someone edits the file by hand.
+    if (head.bodyChecksum == localChecksum) {
+      await BackupPointer.save(
+        revisionId: head.id,
+        recordedHash: localHash,
+        targetIdentity: targetIdentity,
+      );
+      return PullResult(PullOutcome.rebased, revision: head);
+    }
+
+    // 6. Linear descendant, and local unchanged. The ancestry test is
+    //    load-bearing: "clean" compares local against its OWN pointer and
+    //    says nothing about whether remote descends from it.
+    if (head.parentRevisionId == pointer.revisionId &&
+        pointer.isCleanAgainst(localHash)) {
+      await _applyRevision(head);
+      return PullResult(PullOutcome.applied, revision: head);
+    }
+
+    // 7. Diverged, or local is dirty. Surface it; never a modal.
+    return PullResult(PullOutcome.conflict, revision: head);
+  }
+
+  Future<void> _applyRevision(BackupRevision revision) async {
+    final raw = await target.fetch(revision);
+
+    final Object? decoded;
+    try {
+      decoded = jsonDecode(raw);
+    } catch (e) {
+      throw AppFault.backup(
+        BackupFailureKind.malformedRemote,
+        'revision ${revision.id} is not valid JSON',
+        operation: 'pull',
+        targetIdentity: targetIdentity,
+        cause: e,
+      );
+    }
+    if (decoded is! Map<String, dynamic>) {
+      throw AppFault.backup(
+        BackupFailureKind.malformedRemote,
+        'revision ${revision.id} is not a JSON object',
+        operation: 'pull',
+        targetIdentity: targetIdentity,
+      );
+    }
+
+    // Throws AppFault on anything malformed, before a single store is touched.
+    final bundle = ConfigBundle.fromJsonValidated(decoded);
+    await bundle.applyTransactionally();
+
+    // applyTransactionally deliberately clears the pointer, because an import
+    // is unprovenanced. Applying a fetched revision is the one case where we
+    // know exactly what it came from, so re-establish it here.
+    await BackupPointer.save(
+      revisionId: revision.id,
+      recordedHash: canonicalHash(decoded),
+      targetIdentity: targetIdentity,
+    );
+    await ConfigMutationNotifier.instance
+        .markSynced(await ConfigMutationNotifier.instance.generation());
   }
 
   Future<PushResult> push() => _single(_push);
