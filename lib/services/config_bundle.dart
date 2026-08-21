@@ -15,6 +15,7 @@ import 'operator_store.dart';
 import 'people_store.dart';
 import 'position_store.dart';
 import 'service_store.dart';
+import 'visibility_store.dart';
 
 class ConfigBundle {
   final List<Position> positions;
@@ -175,6 +176,12 @@ class ConfigBundle {
     for (final entry in visibilities.entries) {
       await prefs.setString(
           '$_visibilityPrefix${entry.key}', jsonEncode(entry.value));
+    }
+    // Bypasses VisibilityStore.save above, so bump its notifier directly --
+    // otherwise an already-mounted OperatorPanel never learns that imported
+    // hide/show values landed underneath it.
+    if (visibilities.isNotEmpty) {
+      VisibilityStore.changes.value++;
     }
   }
 
