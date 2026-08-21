@@ -19,7 +19,8 @@
 - Every test file uses `SharedPreferences.setMockInitialValues({})` in `setUp`, matching `test/stores_test.dart:15-17`.
 - `flutter analyze` must be clean after every task.
 - Faults thrown across the backup boundary are always `AppFault`, never raw exceptions.
-- Existing behaviour that is *not* bundle-owned must not change. The manual export/import UI (`settings_dialog.dart:179-248`) stays wired to the existing `ConfigBundle.writeToPath`/`readFromPath`.
+- Existing behaviour that is *not* bundle-owned must not change. The manual export/import UI keeps its `writeToPath`/`readFromPath` file handling; only its *apply* path moves to `applyTransactionally` (Task 7).
+- **No backward compatibility.** Pre-release, no users, no deployed data, no exported files anywhere. There is one schema and no legacy branch. **Tests asserting superseded behaviour are deleted, never rewritten or renamed** — a test that documents what the code used to do is baggage, and reading it later costs more than it ever saves.
 
 ## File Structure
 
@@ -1079,26 +1080,25 @@ git commit -m "feat(backup): mutation notifier with durable generation counter"
 
 ### Task 6: Schema version and validation
 
-**Test-policy class: trust contract.** The v0/v1 matrix decides whether importing an old export destroys preset names, so it is tested exhaustively.
+**Test-policy class: trust contract.** Validation decides whether a truncated download silently wipes four stores, so it is tested exhaustively.
 
 **Files:**
 - Modify: `lib/services/config_bundle.dart:19-50` (add `schemaVersion`), `:52-64` (`toJson`), `:66-101` (`fromJson`)
 - Test: `test/backup/config_bundle_schema_test.dart`
-- Modify: `test/config_bundle_test.dart:110-118` and `:131-136`
+- Delete: two tests in `test/config_bundle_test.dart` (`:110-118`, `:131-136`)
 
 **Interfaces:**
 - Consumes: `AppFault` (Task 3).
 - Produces: `ConfigBundle.schemaVersion` (`int`), `ConfigBundle.currentSchemaVersion` (`= 1`), and `ConfigBundle.fromJsonValidated(Map<String, dynamic>)` which throws `AppFault`.
 
-The matrix, copied from the spec so the implementer does not have to hold two documents open:
+The rules, copied from the spec so the implementer does not have to hold two documents open. There is **one** schema — no legacy branch, because no document predating it exists anywhere:
 
-| | **v0 (no `schemaVersion` key)** | **v1+** |
-|---|---|---|
-| `positions`, `people`, `services` | Required. Absent → `malformedRemote`. | Required. Absent → `malformedRemote`. |
-| `heightRanges` | Absent → preserve existing. | Required. Absent → `malformedRemote`. |
-| `presetNames`, `visibilities` | Absent → **preserve** existing keys. | Absent → treat as `{}` and **delete** all existing keys. |
-| `rolandIp`, `cameras`, `operators` | Absent → preserve. | Absent → **delete/reset** to defaults. |
-| `schemaVersion` > current | n/a | `unsupportedSchema`. |
+| Field | Rule |
+|---|---|
+| `schemaVersion` | **Required.** Absent → `malformedRemote`. Greater than current → `unsupportedSchema`. |
+| `positions`, `people`, `services`, `heightRanges` | **Required.** Absent or not a list → `malformedRemote`. Empty list is valid. |
+| `presetNames`, `visibilities` | Absent → `{}`. Import deletes every existing key not listed. |
+| `rolandIp`, `cameras`, `operators` | Absent → reset to defaults. |
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -1110,28 +1110,43 @@ import 'package:navigation_app/services/app_fault_import_shim.dart'
     if (dart.library.io) 'package:navigation_app/services/backup/app_fault.dart';
 import 'package:navigation_app/services/config_bundle.dart';
 
-Map<String, dynamic> _core() => {
+Map<String, dynamic> _valid([Map<String, dynamic> extra = const {}]) => {
+      'schemaVersion': 1,
       'positions': <dynamic>[],
       'people': <dynamic>[],
       'services': <dynamic>[],
+      'heightRanges': <dynamic>[],
+      ...extra,
     };
 
 void main() {
-  group('version detection', () {
-    test('a bundle with no schemaVersion is legacy v0, not malformed', () {
-      final b = ConfigBundle.fromJsonValidated(_core());
-      expect(b.schemaVersion, 0);
+  group('version', () {
+    test('a valid document parses and reports its version', () {
+      expect(ConfigBundle.fromJsonValidated(_valid()).schemaVersion, 1);
     });
 
-    test('an explicit version is honoured', () {
-      final b = ConfigBundle.fromJsonValidated(
-          {..._core(), 'schemaVersion': 1, 'heightRanges': <dynamic>[]});
-      expect(b.schemaVersion, 1);
-    });
-
-    test('a newer version than this build is refused', () {
+    test('a missing schemaVersion is malformed', () {
+      final json = _valid()..remove('schemaVersion');
       expect(
-        () => ConfigBundle.fromJsonValidated({..._core(), 'schemaVersion': 99}),
+        () => ConfigBundle.fromJsonValidated(json),
+        throwsA(predicate((e) =>
+            e is AppFault &&
+            e.kind == BackupFailureKind.malformedRemote.name)),
+      );
+    });
+
+    test('a non-integer schemaVersion is malformed', () {
+      expect(
+        () => ConfigBundle.fromJsonValidated(_valid({'schemaVersion': 'one'})),
+        throwsA(predicate((e) =>
+            e is AppFault &&
+            e.kind == BackupFailureKind.malformedRemote.name)),
+      );
+    });
+
+    test('a newer version than this build is refused, not downgraded', () {
+      expect(
+        () => ConfigBundle.fromJsonValidated(_valid({'schemaVersion': 99})),
         throwsA(predicate((e) =>
             e is AppFault &&
             e.kind == BackupFailureKind.unsupportedSchema.name)),
@@ -1149,9 +1164,14 @@ void main() {
       );
     });
 
-    for (final missing in ['positions', 'people', 'services']) {
-      test('v0 missing $missing is malformed', () {
-        final json = _core()..remove(missing);
+    for (final missing in [
+      'positions',
+      'people',
+      'services',
+      'heightRanges'
+    ]) {
+      test('missing $missing is malformed', () {
+        final json = _valid()..remove(missing);
         expect(
           () => ConfigBundle.fromJsonValidated(json),
           throwsA(predicate((e) =>
@@ -1161,89 +1181,57 @@ void main() {
       });
     }
 
-    test('v1 missing heightRanges is malformed', () {
+    test('a required field of the wrong type is malformed', () {
       expect(
-        () => ConfigBundle.fromJsonValidated({..._core(), 'schemaVersion': 1}),
+        () => ConfigBundle.fromJsonValidated(_valid({'positions': 'nope'})),
         throwsA(predicate((e) =>
             e is AppFault &&
             e.kind == BackupFailureKind.malformedRemote.name)),
       );
     });
 
-    test('v0 missing heightRanges is fine', () {
-      expect(ConfigBundle.fromJsonValidated(_core()).heightRanges, isEmpty);
-    });
-
     test('empty lists are valid — clearing everything is a legitimate edit',
         () {
-      final b = ConfigBundle.fromJsonValidated(
-          {..._core(), 'schemaVersion': 1, 'heightRanges': <dynamic>[]});
-      expect(b.positions, isEmpty);
+      expect(ConfigBundle.fromJsonValidated(_valid()).positions, isEmpty);
     });
   });
 
-  group('absent optional fields carry version-dependent meaning', () {
-    test('v0 leaves presetNames unknown so import preserves them', () {
-      final b = ConfigBundle.fromJsonValidated(_core());
-      expect(b.presetNames, isNull,
-          reason: 'null means unknown; {} would mean delete everything');
-      expect(b.visibilities, isNull);
+  group('optional maps', () {
+    test('absent presetNames means explicitly none', () {
+      expect(ConfigBundle.fromJsonValidated(_valid()).presetNames, isEmpty);
     });
 
-    test('v1 treats absent presetNames as an explicit empty set', () {
-      final b = ConfigBundle.fromJsonValidated(
-          {..._core(), 'schemaVersion': 1, 'heightRanges': <dynamic>[]});
-      expect(b.presetNames, isNotNull);
-      expect(b.presetNames, isEmpty);
+    test('absent visibilities means explicitly none', () {
+      expect(ConfigBundle.fromJsonValidated(_valid()).visibilities, isEmpty);
     });
   });
 
   test('toJson always stamps the current version', () {
-    final json = ConfigBundle.fromJsonValidated(
-            {..._core(), 'schemaVersion': 1, 'heightRanges': <dynamic>[]})
-        .toJson();
+    final json = ConfigBundle.fromJsonValidated(_valid()).toJson();
     expect(json['schemaVersion'], ConfigBundle.currentSchemaVersion);
   });
 }
 ```
-
-> Replace the conditional-import line at the top with a plain
-> `import 'package:navigation_app/services/backup/app_fault.dart';` — the
-> conditional form above is wrong and is here only to be deleted. Written this
-> way deliberately so a copy-paste without reading fails loudly at compile
-> time rather than silently.
 
 - [ ] **Step 2: Run to verify it fails**
 
 Run: `flutter test test/backup/config_bundle_schema_test.dart`
 Expected: FAIL to compile on the import line, then on `fromJsonValidated`.
 
-- [ ] **Step 3: Change the presetNames and visibilities fields to nullable**
+- [ ] **Step 3: Add the schema version field**
 
-In `lib/services/config_bundle.dart`, change these two fields and their constructor parameters so absence is distinguishable from emptiness:
+`presetNames` and `visibilities` stay **non-nullable** with their existing `const {}` defaults. An earlier draft made them nullable so that "absent" could be distinguished from "empty" for legacy files; with one schema there is no such case, and a nullable type would propagate through every consumer for nothing.
 
-```dart
-  /// Preset/macro names keyed by device storage key, then item index string.
-  /// **Null means "not present in this bundle"** — a v0 legacy file — and
-  /// import must then preserve whatever is on the machine. An empty map means
-  /// "explicitly none", and import deletes every existing key.
-  final Map<String, Map<String, String>>? presetNames;
-
-  /// Item visibility, with the same null-versus-empty distinction.
-  final Map<String, Map<String, String>>? visibilities;
-```
-
-Update the constructor to `this.presetNames` and `this.visibilities` with no defaults, and add:
+In `lib/services/config_bundle.dart`, add:
 
 ```dart
-  /// Schema version of the source document. 0 means a legacy file written
-  /// before versioning existed.
+  /// Schema version of the source document.
   final int schemaVersion;
 
   static const int currentSchemaVersion = 1;
 ```
 
-adding `required this.schemaVersion` to the constructor. Then fix the two `toJson` lines to always emit both keys and the version:
+adding `required this.schemaVersion` to the constructor. Then fix `toJson` to always emit both maps and the version:
 
 ```dart
   Map<String, dynamic> toJson() => {
@@ -1252,8 +1240,8 @@ adding `required this.schemaVersion` to the constructor. Then fix the two `toJso
         'people': people.map((p) => p.toJson()).toList(),
         'services': services.map((s) => s.toJson()).toList(),
         'heightRanges': heightRanges.map((r) => r.toJson()).toList(),
-        'presetNames': presetNames ?? const <String, Map<String, String>>{},
-        'visibilities': visibilities ?? const <String, Map<String, String>>{},
+        'presetNames': presetNames,
+        'visibilities': visibilities,
         if (rolandIp != null) 'rolandIp': rolandIp,
         if (cameras != null)
           'cameras': cameras!.map((c) => c.toJson()).toList(),
@@ -1275,43 +1263,39 @@ Add to `ConfigBundle`, alongside the existing `fromJson`:
   /// fault, not a destructive restore.
   factory ConfigBundle.fromJsonValidated(Map<String, dynamic> json) {
     final version = json['schemaVersion'];
-    if (version != null && version is! int) {
-      throw AppFault.backup(
-          BackupFailureKind.malformedRemote, 'schemaVersion is not an integer');
+    if (version is! int) {
+      throw AppFault.backup(BackupFailureKind.malformedRemote,
+          'schemaVersion is missing or not an integer');
     }
-    final v = (version as int?) ?? 0;
-    if (v > currentSchemaVersion) {
-      throw AppFault.backup(BackupFailureKind.unsupportedSchema,
+    if (version > currentSchemaVersion) {
+      throw AppFault.backup(
+          BackupFailureKind.unsupportedSchema,
           'This backup was written by a newer version of the app '
-          '(schema $v, this build understands $currentSchemaVersion). '
+          '(schema $version, this build understands $currentSchemaVersion). '
           'Update the app to sync.');
     }
 
-    void requireList(String field) {
+    for (final field in const [
+      'positions',
+      'people',
+      'services',
+      'heightRanges'
+    ]) {
       if (json[field] is! List) {
         throw AppFault.backup(BackupFailureKind.malformedRemote,
             'required field "$field" is missing or not a list');
       }
     }
 
-    requireList('positions');
-    requireList('people');
-    requireList('services');
-    if (v >= 1) requireList('heightRanges');
-
     final parsed = ConfigBundle.fromJson(json);
     return ConfigBundle(
-      schemaVersion: v,
+      schemaVersion: version,
       positions: parsed.positions,
       people: parsed.people,
       services: parsed.services,
       heightRanges: parsed.heightRanges,
-      presetNames: json.containsKey('presetNames')
-          ? parsed.presetNames
-          : (v >= 1 ? const <String, Map<String, String>>{} : null),
-      visibilities: json.containsKey('visibilities')
-          ? parsed.visibilities
-          : (v >= 1 ? const <String, Map<String, String>>{} : null),
+      presetNames: parsed.presetNames,
+      visibilities: parsed.visibilities,
       rolandIp: parsed.rolandIp,
       cameras: parsed.cameras,
       operators: parsed.operators,
@@ -1321,35 +1305,20 @@ Add to `ConfigBundle`, alongside the existing `fromJson`:
 
 Add `import 'backup/app_fault.dart';` at the top of the file.
 
-- [ ] **Step 5: Update the two tests that encode the old behaviour**
+- [ ] **Step 5: Delete the two tests that encode superseded behaviour**
 
-In `test/config_bundle_test.dart`, the test at `:110-118` asserts `fromJson({})` yields empty collections. That remains true of the *unvalidated* `fromJson`, so keep it but rename it so its scope is unambiguous:
+In `test/config_bundle_test.dart`, **delete** both of these outright:
 
-```dart
-    test('fromJson (unvalidated) treats missing keys as empty collections',
-        () {
+- `:110-118` — `'missing keys in JSON produce empty collections and empty maps'`. It blesses `{}` as a valid empty bundle, which is now precisely the destructive restore `fromJsonValidated` exists to refuse.
+- `:131-136` — the test asserting `toJson` omits empty `presetNames`/`visibilities`. `toJson` now always emits them.
+
+Delete them. Do not rename, invert, or keep them "for the unvalidated path". They assert behaviour nothing depends on, and a test documenting what the code used to do costs every future reader more than it saves.
+
+```bash
+flutter test test/config_bundle_test.dart 2>&1 | tail -3
 ```
 
-and add immediately after it:
-
-```dart
-    test('fromJsonValidated rejects {} rather than producing an empty bundle',
-        () {
-      expect(() => ConfigBundle.fromJsonValidated(<String, dynamic>{}),
-          throwsA(isA<AppFault>()));
-    });
-```
-
-The test at `:131-136` asserting `toJson` omits empty maps must be inverted, since `toJson` now always emits them:
-
-```dart
-    test('toJson always emits presetNames and visibilities, even when empty',
-        () {
-      final json = _full().toJson();
-      expect(json.containsKey('presetNames'), isTrue);
-      expect(json.containsKey('visibilities'), isTrue);
-    });
-```
+Expected: the remaining tests in the file pass.
 
 - [ ] **Step 6: Fix every remaining construction site**
 
@@ -1375,14 +1344,14 @@ Expected: full suite green, analyze clean.
 ```bash
 git add lib/services/config_bundle.dart \
         test/backup/config_bundle_schema_test.dart test/config_bundle_test.dart
-git commit -m "feat(backup): schema version, validation, and the v0/v1 field matrix"
+git commit -m "feat(backup): required schema version and bundle validation"
 ```
 
 ---
 
 ### Task 7: The rollback journal and the import contract
 
-**Test-policy class: trust contract.** This is the highest-stakes task in the plan: it decides whether a failed import leaves the operator's configuration in one piece, and whether importing a legacy export destroys every preset name.
+**Test-policy class: trust contract.** The highest-stakes task in the plan: it decides whether a failed import leaves the operator's configuration in one piece.
 
 **Files:**
 - Create: `lib/services/backup/restore_journal.dart`
@@ -1395,7 +1364,7 @@ git commit -m "feat(backup): schema version, validation, and the v0/v1 field mat
 
 Two corrections to current behaviour, both from the spec:
 
-1. `saveToStores` is **not** a full replace today. The preset/visibility loops only `setString` keys present in the bundle, so a device key absent from the bundle is never deleted. Under v1 it now is.
+1. `saveToStores` is **not** a full replace today. The preset/visibility loops only `setString` keys present in the bundle, so a device key absent from the bundle is never deleted. Now it is.
 2. The apply is a series of independent writes. A failure partway leaves a hybrid, and `fromStores()` will happily upload that hybrid as a valid revision.
 
 - [ ] **Step 1: Write the failing tests**
@@ -1411,19 +1380,12 @@ import 'package:navigation_app/services/position_store.dart';
 import 'package:navigation_app/services/visibility_store.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
-Map<String, dynamic> _v1(Map<String, dynamic> extra) => {
+Map<String, dynamic> _bundle(Map<String, dynamic> extra) => {
       'schemaVersion': 1,
       'positions': <dynamic>[],
       'people': <dynamic>[],
       'services': <dynamic>[],
       'heightRanges': <dynamic>[],
-      ...extra,
-    };
-
-Map<String, dynamic> _v0(Map<String, dynamic> extra) => {
-      'positions': <dynamic>[],
-      'people': <dynamic>[],
-      'services': <dynamic>[],
       ...extra,
     };
 
@@ -1435,7 +1397,7 @@ void main() {
       await PresetNameStore.save('10.0.1.10', 3, 'Close Up');
       expect(await PresetNameStore.loadAll('10.0.1.10'), isNotEmpty);
 
-      await ConfigBundle.fromJsonValidated(_v1({}))
+      await ConfigBundle.fromJsonValidated(_bundle({}))
           .applyTransactionally();
 
       expect(await PresetNameStore.loadAll('10.0.1.10'), isEmpty,
@@ -1444,30 +1406,9 @@ void main() {
 
     test('deletes visibility keys absent from the incoming bundle', () async {
       await VisibilityStore.save('roland_10.0.1.20', 5, ItemVisibility.hide);
-      await ConfigBundle.fromJsonValidated(_v1({}))
+      await ConfigBundle.fromJsonValidated(_bundle({}))
           .applyTransactionally();
       expect(await VisibilityStore.loadAll('roland_10.0.1.20'), isEmpty);
-    });
-  });
-
-  group('v0 legacy preservation — the load-bearing regression', () {
-    test('importing an unversioned export PRESERVES preset names', () async {
-      await PresetNameStore.save('10.0.1.10', 3, 'Close Up');
-
-      await ConfigBundle.fromJsonValidated(_v0({}))
-          .applyTransactionally();
-
-      expect(await PresetNameStore.loadAll('10.0.1.10'), {3: 'Close Up'},
-          reason: 'a legacy file omits presetNames because versioning did not '
-              'exist yet, not because the operator cleared them');
-    });
-
-    test('importing an unversioned export PRESERVES visibilities', () async {
-      await VisibilityStore.save('roland_10.0.1.20', 5, ItemVisibility.hide);
-      await ConfigBundle.fromJsonValidated(_v0({}))
-          .applyTransactionally();
-      expect(await VisibilityStore.loadAll('roland_10.0.1.20'),
-          {5: ItemVisibility.hide});
     });
   });
 
@@ -1476,7 +1417,7 @@ void main() {
       await PositionStore.saveAll([const Position(id: 'p1', name: 'Ambo')]);
       await PresetNameStore.save('10.0.1.10', 3, 'Close Up');
 
-      final bundle = ConfigBundle.fromJsonValidated(_v1({}));
+      final bundle = ConfigBundle.fromJsonValidated(_bundle({}));
       await expectLater(
         bundle.applyTransactionally(failAfterStoresForTest: 2),
         throwsA(anything),
@@ -1505,7 +1446,7 @@ void main() {
     });
 
     test('a successful apply leaves no journal behind', () async {
-      await ConfigBundle.fromJsonValidated(_v1({})).applyTransactionally();
+      await ConfigBundle.fromJsonValidated(_bundle({})).applyTransactionally();
       final prefs = await SharedPreferences.getInstance();
       expect(prefs.getString('backup_restore_journal'), isNull);
     });
@@ -1605,7 +1546,7 @@ class RestoreJournal {
 
 - [ ] **Step 4: Implement the transactional apply**
 
-Add to `ConfigBundle` in `lib/services/config_bundle.dart`, leaving the existing `saveToStores()` in place for the untouched manual-import path:
+**Replace** `saveToStores()` in `lib/services/config_bundle.dart` with this. Do not keep the old method alongside it: two apply paths with different semantics is exactly the baggage this project has no reason to carry, and the manual-import UI should get the transactional one too. Update the one caller in `settings_dialog.dart` to `applyTransactionally()`.
 
 ```dart
   /// Applies this bundle to the live stores, atomically.
@@ -1644,15 +1585,11 @@ Add to `ConfigBundle` in `lib/services/config_bundle.dart`, leaving the existing
       }
       if (operators != null) await OperatorStore.saveAll(operators!);
 
-      // Null means "not present in this bundle" — a v0 legacy file — and the
-      // existing keys are left alone. A non-null map is authoritative: keys
-      // it does not mention are deleted.
-      if (presetNames != null) {
-        await _replacePrefixed(prefs, _presetPrefix, presetNames!);
-      }
-      if (visibilities != null) {
-        await _replacePrefixed(prefs, _visibilityPrefix, visibilities!);
-      }
+      // Authoritative: any device key the bundle does not mention is deleted.
+      // This is the correction to today's behaviour, where the loops only
+      // setString keys that are present and never remove the rest.
+      await _replacePrefixed(prefs, _presetPrefix, presetNames);
+      await _replacePrefixed(prefs, _visibilityPrefix, visibilities);
 
       await RestoreJournal.clear();
     } catch (_) {
@@ -2767,10 +2704,9 @@ git commit -m "feat(backup): roll back an interrupted restore at startup"
 | Retention conjunction (count AND age) | 4 |
 | Mutation source, eight-store refactor | 5 |
 | Durable pending intent | 5 |
-| `schemaVersion` in envelope, v0/v1 matrix, `{}` malformed | 6 |
+| `schemaVersion` required, `{}` malformed, one schema | 6 |
 | `unsupportedSchema` fail-closed | 6 |
 | Import contract: full replace under v1 | 7 |
-| Legacy preservation regression test | 7 |
 | Rollback journal, wholly-old-or-wholly-new | 7, 12 |
 | Pointer transitions, target identity | 8, 9, 10 |
 | Push: no-op rebase, conflict, fork check | 9 |

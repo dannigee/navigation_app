@@ -106,13 +106,9 @@ and height ranges. Only the stated contract was wrong.
 Bundle-owned keys are **fully replaced**. On import, any `preset_names_*` or
 `item_visibility_*` key not present in the incoming bundle is **deleted**.
 
-`ConfigBundle` must distinguish "field absent because this is a legacy file"
-from "field present and deliberately empty", so it carries a `schemaVersion`
-field of its own — `ConfigBundle.fromJson` cannot decide, and `saveToStores`
-cannot act, without it. The full matrix is in
-[Schema and validation](#schema-and-validation), and it is load-bearing: get it
-wrong and importing an old manual export deletes every preset name on the
-machine.
+An absent field means empty and is applied. There is no "absent means unknown,
+so preserve" case, because there are no documents in the world that predate
+this contract — see [No legacy compatibility](#no-legacy-compatibility).
 
 ### Import is transactional via a rollback journal
 
@@ -250,36 +246,45 @@ RFC 8785 implementation.
 without its sidecar must be self-describing. It changes only when the schema
 changes, so it does not defeat content hashing.
 
-`ConfigBundle` gains a `schemaVersion` field. Current exports have no such key
-(`config_bundle.dart:52-64`), so **a missing `schemaVersion` means legacy v0** —
-accepted, not rejected, and never defaulted to 1. Defaulting an unversioned
-legacy export to v1 is precisely the data-loss bug this section exists to
-prevent.
+### No legacy compatibility
 
-The complete matrix, which an implementer must be able to follow literally:
+This project is pre-release. It has no users, no deployed data, and no exported
+files in anyone's Documents folder. Nothing needs to remain readable.
 
-| | **v0 (no `schemaVersion` key)** | **v1+** |
-|---|---|---|
-| `positions`, `people`, `services` | Required. Absent → `malformedRemote`. | Required. Absent → `malformedRemote`. |
-| `heightRanges` | Absent → preserve existing. | Required. Absent → `malformedRemote`. |
-| `presetNames`, `visibilities` | Absent → **preserve** existing keys. Present → apply, and delete keys not listed. | Absent → treat as `{}` and **delete** all existing keys. |
-| `rolandIp`, `cameras`, `operators` | Absent → preserve. | Absent → **delete/reset** to defaults. |
-| `schemaVersion` > this build | n/a | `unsupportedSchema`. Never pull, never push over it. |
+So there is exactly **one** schema. `schemaVersion` is **required**; a document
+without it is `malformedRemote`, not a legacy file to be accommodated. An
+earlier draft of this section specified a v0/v1 matrix in which an absent field
+meant "unknown, preserve what is on the machine" — that apparatus existed
+solely to protect unversioned manual exports written before versioning, and no
+such document exists. It is removed, along with the nullable
+present-versus-absent distinction on `presetNames` and `visibilities` that only
+that matrix needed.
 
-`{}` is therefore `malformedRemote` under both versions, because the three core
-lists are required in both. The existing tests at
-`test/config_bundle_test.dart:110-118` and `:131-136` encode the old permissive
-behaviour and must change with the code.
+Carrying compatibility for a past that never shipped costs a branch in the
+parser, a nullable type that propagates through every consumer, and a test
+suite defending behaviour nobody depends on.
 
-The `unsupportedSchema` rule protects against the reverse hazard: an older
-machine pulling a newer revision, silently dropping fields it does not
-understand, and pushing back a downgraded snapshot that destroys them
-permanently.
+The rules, entire:
 
-**The load-bearing regression test:** seed preset names and visibilities, import
-an unversioned legacy export containing neither field, and assert they *survive*.
-Without that test the v1 delete rule will eventually be applied to a v0 file by
-someone who read the code and not this table.
+| Field | Rule |
+|---|---|
+| `schemaVersion` | **Required.** Absent → `malformedRemote`. Greater than this build → `unsupportedSchema`. |
+| `positions`, `people`, `services`, `heightRanges` | **Required.** Absent or not a list → `malformedRemote`. Empty list is valid — clearing everything is a legitimate edit. |
+| `presetNames`, `visibilities` | Absent → treat as `{}`. Import **deletes** every existing key not listed. |
+| `rolandIp`, `cameras`, `operators` | Absent → reset to defaults. |
+
+`{}` is therefore `malformedRemote`: it has no `schemaVersion` and none of the
+required lists.
+
+`unsupportedSchema` still matters, and is the one forward-looking rule kept. It
+guards the reverse hazard once there *are* two builds in play: an older machine
+pulling a newer revision, silently dropping fields it does not understand, and
+pushing back a downgraded snapshot that destroys them permanently.
+
+Tests that encode the old permissive behaviour — `test/config_bundle_test.dart`
+`:110-118` (blessing `{}` as an empty bundle) and `:131-136` (asserting
+`toJson` omits empty maps) — are **deleted**, not rewritten. They assert things
+that are no longer true and that nothing depends on.
 
 ## The sync protocol
 
@@ -754,11 +759,9 @@ bundle identity, and the keychain entitlements.
   out-of-order completions; a pull success does not clear a failed push.
 - **Status precedence tests** — one per row, and specifically: clean local plus
   an active `authExpired` renders **red, not green**.
-- **Import contract tests** — the gap the current suite has. Under v1, absent
-  preset and visibility keys are deleted. **Under v0 they are preserved** —
-  seed values, import an unversioned legacy export lacking both fields, assert
-  they survive. `{}` is malformed under both versions; a newer `schemaVersion`
-  is refused.
+- **Import contract tests** — the gap the current suite has. Absent preset and
+  visibility keys are deleted. A document with no `schemaVersion`, or missing
+  any required list, is `malformedRemote`. A newer `schemaVersion` is refused.
 - **Transaction tests** — inject a failure at each materialization step and
   assert the live stores are **wholly old or wholly new**, never a mix.
   Asserting merely that a retained snapshot survived would pass over the bug.
@@ -890,9 +893,11 @@ material written to address round 1. Accepted:
   trip a phantom conflict on the next real edit.
 - **The status table had no evaluation order**, so clean-local plus a dead
   credential could render green — the precise bug the surface exists to prevent.
-- **The legacy schema gate never said a missing `schemaVersion` means v0**,
-  leaving the door open to the exact import-deletes-preset-names bug it was
-  written to close. Now a literal matrix with a named regression test.
+- **The legacy schema gate never said a missing `schemaVersion` means v0.**
+  Addressed at the time with a literal v0/v1 matrix; subsequently **deleted
+  entirely** when Daniel pointed out the project is pre-release with no users,
+  so no unversioned document the matrix protected can exist. See
+  [No legacy compatibility](#no-legacy-compatibility).
 - **`serverError` was dropped** while splitting `quotaExceeded`, leaving Drive
   5xx unclassified. Restored as `transientServer`.
 - `siblings()` cut; `list(limit:)` answers the same question without forcing
@@ -901,7 +906,7 @@ material written to address round 1. Accepted:
 Antigravity's verdict was a conditional pass; `gpt-5.6-sol`'s was not-ready,
 citing the transactionality gap. The stricter verdict was taken.
 
-### Decisions taken after round 2
+### Decisions taken after round 2 and during planning
 
 Daniel, 21 Aug 2026:
 
@@ -918,3 +923,7 @@ Daniel, 21 Aug 2026:
 - **The app is a singleton.** A second instance must be prevented from starting
   rather than tolerated, which removes the cached-`SharedPreferences` staleness
   hazard rather than requiring reload semantics for it.
+- **No backward compatibility of any kind.** Pre-release, no users, no deployed
+  data. One schema, no legacy branch, and tests asserting superseded behaviour
+  are deleted rather than rewritten. Nothing in this design may spend
+  complexity defending a past that never shipped.
