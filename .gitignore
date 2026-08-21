@@ -43,3 +43,12 @@ app.*.map.json
 /android/app/debug
 /android/app/profile
 /android/app/release
+
+# Agent/tool state. The vendored skills under .claude/skills/ and the project
+# settings ARE tracked — they are how the process travels with a clone.
+# Everything else under .claude/ is per-machine.
+.claude/*
+!.claude/skills/
+!.claude/settings.json
+.superpowers/
+.worktrees/
