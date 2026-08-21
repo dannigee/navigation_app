@@ -58,6 +58,30 @@ sudo ifconfig lo0 -alias 127.0.0.3
 sudo ifconfig lo0 -alias 127.0.0.4
 ```
 
+### On Linux
+
+The aliasing above is macOS-only and the rig skips it: `AliasManager.ensure`
+(`mockrig/netsetup.py:34`) checks `platform.system() == "Darwin"` first, logs
+`Loopback aliasing is macOS-only; skipping on Linux`, and returns. `teardown()`
+then iterates an empty list, so `ifconfig` is never invoked at all. There is
+nothing to clean up by hand.
+
+Nothing is lost by skipping it. Linux puts `127.0.0.1/8` on `lo`, so the whole
+`127.0.0.0/8` is already local and the cameras bind on `127.0.0.2-4` without
+any alias being added. Root is still needed for port 80:
+
+```bash
+sudo python3 tools/mock_server/run.py
+```
+
+Everything else in the rig is standard-library sockets and HTTP, so it runs
+unchanged. The one piece that does not carry over is `drive_macos_app.sh`,
+which uses AppleScript and `cliclick` to click the built macOS app; nothing
+else depends on it, and `verify.dart` and `chaos_demo.dart` do not.
+
+Not yet exercised on Linux — this is read off the guard in `netsetup.py` and
+standard loopback behaviour, not a run we have done.
+
 ## Verifying it
 
 `verify.dart` drives the rig using the app's **real** `RolandService` and
