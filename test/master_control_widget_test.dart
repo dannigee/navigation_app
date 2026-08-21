@@ -174,6 +174,31 @@ void main() {
     expect((await PresetNameStore.loadAll('roland_'))[1], 'Opening Wide');
   });
 
+  testWidgets(
+      'flushing a pending rename refreshes the grid label and prefill, not '
+      'just SharedPreferences', (tester) async {
+    await tester.pumpWidget(_build());
+    await tester.pumpAndSettle();
+    await _selectMacro(tester, 'Macro 1');
+
+    await tester.enterText(find.byType(TextField).first, 'Opening Wide');
+    // Switch before the debounce would have fired on its own -- this flushes
+    // the pending rename for Macro 1.
+    await tester.tap(find.text('Macro 2'));
+    await tester.pumpAndSettle();
+
+    // The grid button for the flushed item must reflect the new name
+    // immediately, without needing a device switch to reload the cache.
+    expect(find.text('Opening Wide (1)'), findsOneWidget);
+    expect(find.text('Macro 1'), findsNothing);
+
+    // Re-selecting it should prefill with the saved name, not the default.
+    await tester.tap(find.text('Opening Wide (1)'));
+    await tester.pumpAndSettle();
+    final field = tester.widget<TextField>(find.byType(TextField).first);
+    expect(field.controller!.text, 'Opening Wide');
+  });
+
   testWidgets('a named grid button shows "name (number)"', (tester) async {
     await PresetNameStore.save('roland_', 1, 'Opening Wide');
     await tester.pumpWidget(_build());

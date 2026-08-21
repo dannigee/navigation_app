@@ -99,10 +99,18 @@ class _MasterControlWidgetState extends State<MasterControlWidget> {
     if (_renameDebounce?.isActive ?? false) {
       _renameDebounce!.cancel();
       if (_selectedItemIndex != null) {
-        final device = _devices[_selectedDeviceIndex];
+        final deviceIndex = _selectedDeviceIndex;
+        final device = _devices[deviceIndex];
         final index = _selectedItemIndex!;
         final name = _renameController.text.trim();
-        _enqueueSave(() => device.saveName(index, name));
+        // Not awaited here (dispose can't await), but chained onto the
+        // enqueued save so the cache is refreshed the same way _saveRename
+        // does -- otherwise the grid/prefill for this item keeps showing
+        // its default label until some other reload happens to run.
+        _enqueueSave(() => device.saveName(index, name)).then((_) async {
+          final names = await device.loadNames();
+          if (mounted) setState(() => _namesByDevice[deviceIndex] = names);
+        });
       }
     }
   }
