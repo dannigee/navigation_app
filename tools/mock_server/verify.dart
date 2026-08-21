@@ -73,10 +73,8 @@ Future<void> _verifyRoland() async {
   final received = <dynamic>[];
   StreamSubscription<dynamic>? sub;
 
-  try {
-    await check('connect (telnet negotiation + password auth)',
-        () => service.connect());
-  } catch (_) {}
+  await check('connect (telnet negotiation + password auth)',
+      () => service.connect());
 
   sub = service.responseStream.listen(received.add, onError: (_) {});
 

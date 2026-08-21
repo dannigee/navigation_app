@@ -22,6 +22,7 @@ Reference points in the client:
 """
 
 import socket
+import struct
 import threading
 import time
 
@@ -117,7 +118,7 @@ class RolandMock:
                 # stream close.
                 conn.setsockopt(
                     socket.SOL_SOCKET, socket.SO_LINGER,
-                    b"\x01\x00\x00\x00\x00\x00\x00\x00",
+                    struct.pack("ii", 1, 0),
                 )
                 conn.close()
             except OSError:

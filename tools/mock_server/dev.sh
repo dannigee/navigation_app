@@ -14,6 +14,8 @@
 # fine for camera-only testing, or just eyeballing the UI.
 
 set -euo pipefail
+set -m  # background jobs get their own process group, so cleanup can signal
+        # the whole group instead of just the direct child (sudo, when used).
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
@@ -35,7 +37,13 @@ done
 
 rig_cmd=(python3 tools/mock_server/run.py)
 if [[ "$CAMERAS" == 1 ]]; then
-  rig_cmd=(sudo "${rig_cmd[@]}")
+  # Authenticate synchronously, in the foreground, before anything is
+  # backgrounded -- a sudo prompt on a backgrounded job can go unseen and
+  # hang the script. -n on the actual run makes a since-expired ticket fail
+  # fast instead of prompting a second time from the background.
+  echo "Cameras need root; authenticating now..."
+  sudo -v || { echo "sudo authentication failed" >&2; exit 1; }
+  rig_cmd=(sudo -n "${rig_cmd[@]}")
 else
   rig_cmd+=(--no-cameras)
 fi
@@ -48,7 +56,10 @@ cleanup() {
   if kill -0 "$RIG_PID" 2>/dev/null; then
     echo
     echo "Stopping mock rig (pid $RIG_PID)..."
-    kill -INT "$RIG_PID" 2>/dev/null || true
+    # Signal the whole process group, not just $RIG_PID: with --cameras that
+    # pid is sudo, and sudo does not reliably forward signals to the python
+    # child it launched, which would leave loopback aliases behind.
+    kill -INT -- "-$RIG_PID" 2>/dev/null || true
     wait "$RIG_PID" 2>/dev/null || true
   fi
 }
