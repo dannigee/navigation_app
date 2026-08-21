@@ -42,8 +42,6 @@ class _OperatorPanelState extends State<OperatorPanel> {
 
   bool _isRecording = false;
   final List<ServiceStep> _recordedSteps = [];
-  final TextEditingController _recordingNameController =
-      TextEditingController();
 
   @override
   void initState() {
@@ -74,7 +72,6 @@ class _OperatorPanelState extends State<OperatorPanel> {
   void dispose() {
     _removeListeners();
     _scrollController.dispose();
-    _recordingNameController.dispose();
     super.dispose();
   }
 
@@ -138,14 +135,14 @@ class _OperatorPanelState extends State<OperatorPanel> {
     setState(() => _isRecording = false);
     if (_recordedSteps.isEmpty) return;
 
-    _recordingNameController.clear();
+    var pendingName = '';
     final name = await showDialog<String>(
       context: context,
       builder: (ctx) => AlertDialog(
         title: Text('Save Recording (${_recordedSteps.length} steps)'),
         content: TextField(
-          controller: _recordingNameController,
           autofocus: true,
+          onChanged: (v) => pendingName = v,
           decoration: const InputDecoration(
             labelText: 'Service Name',
             hintText: 'e.g. Standard Mass',
@@ -158,7 +155,7 @@ class _OperatorPanelState extends State<OperatorPanel> {
           ),
           FilledButton(
             onPressed: () {
-              final trimmed = _recordingNameController.text.trim();
+              final trimmed = pendingName.trim();
               if (trimmed.isEmpty) return;
               Navigator.of(ctx).pop(trimmed);
             },
@@ -168,18 +165,27 @@ class _OperatorPanelState extends State<OperatorPanel> {
       ),
     );
 
+    if (!mounted) return;
+
     if (name == null) {
       setState(() => _recordedSteps.clear());
       return;
     }
 
-    final services = await ServiceStore.loadAll();
-    services.add(Service(
-      id: generateServiceId(),
-      name: name,
-      steps: List.of(_recordedSteps),
-    ));
-    await ServiceStore.saveAll(services);
+    try {
+      final services = await ServiceStore.loadAll();
+      services.add(Service(
+        id: generateServiceId(),
+        name: name,
+        steps: List.of(_recordedSteps),
+      ));
+      await ServiceStore.saveAll(services);
+    } catch (e) {
+      if (mounted) widget.onResponse('Error saving service: $e');
+      return;
+    }
+
+    if (!mounted) return;
     setState(() => _recordedSteps.clear());
     widget.onServicesChanged?.call();
   }

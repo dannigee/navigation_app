@@ -318,5 +318,54 @@ void main() {
       expect(await ServiceStore.loadAll(), isEmpty);
       expect(find.text('Record'), findsOneWidget);
     });
+
+    testWidgets(
+        'disposing the panel while the save dialog is open does not throw',
+        (tester) async {
+      final showPanel = ValueNotifier<bool>(true);
+      addTearDown(showPanel.dispose);
+
+      await tester.pumpWidget(
+        MaterialApp(
+          theme: ThemeData(useMaterial3: false),
+          home: Scaffold(
+            body: ValueListenableBuilder<bool>(
+              valueListenable: showPanel,
+              builder: (context, show, _) => show
+                  ? OperatorPanel(
+                      operator: OperatorProfile.defaultProfile,
+                      rolandService: MockRolandService(),
+                      rolandConnected: ValueNotifier(true),
+                      cameras: const [],
+                      onResponse: (_) {},
+                    )
+                  : const SizedBox.shrink(),
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.text('Record'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Macro 1').first);
+      await tester.pumpAndSettle();
+      await tester.tap(find.textContaining('Stop'));
+      await tester.pumpAndSettle();
+
+      expect(find.byType(AlertDialog), findsOneWidget);
+
+      // showDialog always targets the root navigator, so the dialog
+      // survives even though the panel underneath it is now disposed
+      // while _stopRecording() is still awaiting its result.
+      showPanel.value = false;
+      await tester.pump();
+
+      await tester.enterText(find.byType(TextField), 'Late Save');
+      await tester.tap(find.widgetWithText(FilledButton, 'Save'));
+      await tester.pumpAndSettle();
+
+      expect(tester.takeException(), isNull);
+    });
   });
 }
