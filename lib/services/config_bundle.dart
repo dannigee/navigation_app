@@ -253,6 +253,8 @@ class ConfigBundle {
         await OperatorStore.saveAll(
             operators ?? const [OperatorProfile.defaultProfile]);
         tick();
+        await OperatorStore.saveActiveId(OperatorProfile.defaultId);
+        tick();
 
         // Authoritative: any device key the bundle does not mention is
         // deleted. This is the correction to today's behaviour, where the
@@ -265,19 +267,26 @@ class ConfigBundle {
       // re-establishes provenance itself after applying a fetched revision.
       await BackupPointer.clear();
       await RestoreJournal.clear();
-    } on _InjectedRestoreFailure {
-      await RestoreJournal.rollbackIfPresent();
-      rethrow;
-    } on StateError catch (error) {
-      await RestoreJournal.rollbackIfPresent();
-      throw AppFault.backup(
-        BackupFailureKind.storageWriteFailed,
-        'Could not persist the imported configuration.',
-        cause: error,
-      );
-    } catch (_) {
-      await RestoreJournal.rollbackIfPresent();
-      rethrow;
+    } catch (error, stackTrace) {
+      try {
+        await RestoreJournal.rollbackIfPresent();
+      } catch (rollbackError) {
+        throw AppFault.backup(
+          BackupFailureKind.storageWriteFailed,
+          'The import failed and its rollback could not be persisted. '
+          'The recovery journal was retained.',
+          cause: rollbackError,
+        );
+      }
+
+      if (error is StateError && error is! _InjectedRestoreFailure) {
+        throw AppFault.backup(
+          BackupFailureKind.storageWriteFailed,
+          'Could not persist the imported configuration.',
+          cause: error,
+        );
+      }
+      Error.throwWithStackTrace(error, stackTrace);
     }
   }
 

@@ -1,12 +1,10 @@
 import 'package:flutter/material.dart';
 import '../models/height_range.dart';
-import '../models/operator_profile.dart';
 import '../models/panasonic_camera_config.dart';
 import '../models/position.dart';
 import '../services/abstract/roland_service_abstract.dart';
 import '../services/config_bundle.dart';
 import '../services/device_config_store.dart';
-import '../services/operator_store.dart';
 import 'connections_dialog.dart';
 import 'height_range_manager_dialog.dart';
 import 'master_control_widget.dart';
@@ -296,7 +294,6 @@ class SettingsDialog extends StatelessWidget {
       bundle.rolandIp ?? DeviceConfigStore.defaultRolandIp,
       bundle.cameras ?? DeviceConfigStore.defaultCameras,
     );
-    await OperatorStore.saveActiveId(OperatorProfile.defaultId);
     onOperatorsChanged();
     onAllDataChanged();
     onResponse('Configuration imported successfully');

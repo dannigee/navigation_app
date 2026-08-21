@@ -50,8 +50,11 @@ class BackupPointer {
 
   static Future<void> clear() async {
     final prefs = await SharedPreferences.getInstance();
-    await prefs.remove(revisionKey);
-    await prefs.remove(hashKey);
-    await prefs.remove(targetKey);
+    for (final key in [revisionKey, hashKey, targetKey]) {
+      if (!await prefs.remove(key)) {
+        await prefs.reload();
+        throw StateError('Could not clear backup provenance');
+      }
+    }
   }
 }
