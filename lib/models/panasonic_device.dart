@@ -2,6 +2,7 @@ import 'dart:async';
 import 'package:flutter/foundation.dart';
 import 'controllable_device.dart';
 import 'panasonic_camera_config.dart';
+import 'service.dart';
 
 /// [ControllableDevice] implementation for a Panasonic PTZ camera (presets 0–99).
 class PanasonicDevice extends ControllableDevice {
@@ -75,4 +76,12 @@ class PanasonicDevice extends ControllableDevice {
       throw DeviceException('Error recalling preset: $e');
     }
   }
+
+  @override
+  ServiceStep toServiceStep(int index) => ServiceStep(
+        id: generateServiceId(),
+        type: StepType.shot,
+        cameraIp: camera.ipController.text,
+        cameraPresetIndex: index,
+      );
 }

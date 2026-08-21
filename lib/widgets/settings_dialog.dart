@@ -11,6 +11,7 @@ import 'connections_dialog.dart';
 import 'height_range_manager_dialog.dart';
 import 'master_control_widget.dart';
 import 'operator_manager_dialog.dart';
+import 'people_manager_dialog.dart';
 import 'pinp_tab.dart';
 import 'position_manager_dialog.dart';
 import 'service_manager_dialog.dart';
@@ -32,6 +33,7 @@ class SettingsDialog extends StatelessWidget {
   final VoidCallback onPositionsChanged;
   final VoidCallback onServicesChanged;
   final VoidCallback onHeightRangesChanged;
+  final VoidCallback onPeopleChanged;
   final VoidCallback onAllDataChanged;
   final DeviceConfigCallback onDeviceConfigSaved;
 
@@ -56,6 +58,7 @@ class SettingsDialog extends StatelessWidget {
     required this.onPositionsChanged,
     required this.onServicesChanged,
     required this.onHeightRangesChanged,
+    required this.onPeopleChanged,
     required this.onAllDataChanged,
     required this.onDeviceConfigSaved,
     required this.onOperatorsChanged,
@@ -169,6 +172,18 @@ class SettingsDialog extends StatelessWidget {
         positions: positions,
         cameras: panasonicCameras,
         onSaved: onServicesChanged,
+      ),
+    );
+  }
+
+  void _openPeopleManager(BuildContext context) {
+    showDialog(
+      context: context,
+      builder: (_) => PeopleManagerDialog(
+        positions: positions,
+        cameras: panasonicCameras,
+        heightRanges: heightRanges,
+        onSaved: onPeopleChanged,
       ),
     );
   }
@@ -394,6 +409,12 @@ class SettingsDialog extends StatelessWidget {
                 title: 'Manage Positions',
                 subtitle: 'Define physical locations linked to camera presets',
                 onTap: () => _openPositionManager(context),
+              ),
+              _tile(
+                icon: Icons.person_add,
+                title: 'Manage People',
+                subtitle: 'Add people and assign their presets per position',
+                onTap: () => _openPeopleManager(context),
               ),
               _tile(
                 icon: Icons.format_list_numbered,
