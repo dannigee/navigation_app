@@ -385,7 +385,11 @@ class _HeightRangeManagerDialogState extends State<HeightRangeManagerDialog> {
             const DropdownMenuItem<int?>(value: null, child: Text('—')),
             for (var n = 1; n <= 100; n++)
               DropdownMenuItem<int?>(
-                  value: n, child: Text(presetNames[n - 1] ?? '$n')),
+                value: n,
+                child: Text(presetNames[n - 1] != null
+                    ? '${presetNames[n - 1]} ($n)'
+                    : '$n'),
+              ),
           ],
           onChanged: onChanged,
         ),

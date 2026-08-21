@@ -343,8 +343,8 @@ class _OperatorPanelState extends State<OperatorPanel> {
                                 child: Row(
                                   mainAxisAlignment: MainAxisAlignment.center,
                                   children: rowItems.asMap().entries.map((e) {
-                                    final label = names[e.value] ??
-                                        device.defaultLabel(e.value);
+                                    final label =
+                                        device.labelFor(e.value, names[e.value]);
                                     return Padding(
                                       padding: EdgeInsets.only(
                                           left: e.key == 0 ? 0 : spacing),

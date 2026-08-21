@@ -39,6 +39,9 @@ class PanasonicDevice extends ControllableDevice {
   String describe(int index) => 'Preset ${index + 1}';
 
   @override
+  String numberSuffix(int index) => '${index + 1}';
+
+  @override
   String get emptyMessage => 'No saved presets available';
 
   @override

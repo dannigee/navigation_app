@@ -162,9 +162,11 @@ class _OperatorManagerDialogState extends State<OperatorManagerDialog> {
           : List.generate(100, (i) => i);
 
   String _labelFor(String key, int index) {
+    final defaultLabel =
+        key == widget.rolandStorageKey ? 'M$index' : '${index + 1}';
     final custom = _namesByKey[key]?[index];
-    if (custom != null && custom.isNotEmpty) return custom;
-    return key == widget.rolandStorageKey ? 'M$index' : '${index + 1}';
+    if (custom == null || custom.isEmpty) return defaultLabel;
+    return '$custom ($defaultLabel)';
   }
 
   // ── Build ────────────────────────────────────────────────────────────────

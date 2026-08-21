@@ -258,7 +258,7 @@ void main() {
       await tester.tap(find.byType(DropdownButton<int?>));
       await tester.pumpAndSettle();
 
-      expect(find.text('Wide Shot'), findsOneWidget);
+      expect(find.text('Wide Shot (5)'), findsOneWidget);
       expect(find.text('5'), findsNothing);
     });
 
@@ -281,7 +281,7 @@ void main() {
 
       await tester.tap(find.byType(DropdownButton<int?>));
       await tester.pumpAndSettle();
-      await tester.tap(find.text('Wide Shot').last);
+      await tester.tap(find.text('Wide Shot (5)').last);
       await tester.pumpAndSettle();
       await tester.tap(find.text('Save'));
       await tester.pumpAndSettle();

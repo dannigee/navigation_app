@@ -364,7 +364,11 @@ class _PeopleManagerDialogState extends State<PeopleManagerDialog> {
             const DropdownMenuItem<int?>(value: null, child: Text('—')),
             for (var n = 1; n <= 100; n++)
               DropdownMenuItem<int?>(
-                  value: n, child: Text(presetNames[n - 1] ?? '$n')),
+                value: n,
+                child: Text(presetNames[n - 1] != null
+                    ? '${presetNames[n - 1]} ($n)'
+                    : '$n'),
+              ),
           ],
           onChanged: onChanged,
         ),
@@ -394,6 +398,11 @@ class _PeopleManagerDialogState extends State<PeopleManagerDialog> {
                     cameraIp: ip,
                     heightRanges: widget.heightRanges,
                   );
+            final heightDefaultLabel = heightDefault == null
+                ? null
+                : (_presetNamesByCamera[ip]?[heightDefault] != null
+                    ? '${_presetNamesByCamera[ip]![heightDefault]} (${heightDefault + 1})'
+                    : 'preset ${heightDefault + 1}');
             return Padding(
               padding: const EdgeInsets.only(bottom: 6),
               child: Column(
@@ -418,11 +427,11 @@ class _PeopleManagerDialogState extends State<PeopleManagerDialog> {
                       ),
                     ],
                   ),
-                  if (heightDefault != null)
+                  if (heightDefaultLabel != null)
                     Padding(
                       padding: const EdgeInsets.only(left: 90, top: 2),
                       child: Text(
-                        'Defaults to preset ${heightDefault + 1} via height range',
+                        'Defaults to $heightDefaultLabel via height range',
                         style: TextStyle(
                             color: Colors.blue.shade700,
                             fontSize: 11,

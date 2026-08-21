@@ -390,7 +390,7 @@ void main() {
       await tester.tap(find.byType(DropdownButton<int?>));
       await tester.pumpAndSettle();
 
-      expect(find.text('Wide Shot'), findsOneWidget);
+      expect(find.text('Wide Shot (5)'), findsOneWidget);
       expect(find.text('5'), findsNothing);
     });
 
@@ -416,7 +416,7 @@ void main() {
 
       await tester.tap(find.byType(DropdownButton<int?>));
       await tester.pumpAndSettle();
-      await tester.tap(find.text('Wide Shot').last);
+      await tester.tap(find.text('Wide Shot (5)').last);
       await tester.pumpAndSettle();
       await tester.tap(find.text('Save'));
       await tester.pumpAndSettle();
@@ -654,6 +654,38 @@ void main() {
       await tester.pumpAndSettle();
 
       expect(find.textContaining('Defaults to preset 5 via height range'),
+          findsOneWidget);
+    });
+
+    testWidgets(
+        'editor shows the preset name in the hint when one is saved',
+        (tester) async {
+      final cam = PanasonicCameraConfig(name: 'Cam', ipAddress: '10.0.1.10');
+      addTearDown(cam.dispose);
+      await PresetNameStore.save('10.0.1.10', 4, 'Cantor');
+      await PeopleStore.saveAll([
+        Person(id: 'p1', name: 'Alice', heightCm: 160),
+      ]);
+      final shortRange = HeightRange(
+        id: 'hr1',
+        maxHeightCm: 165,
+        positionPresets: {
+          'pos1': {'10.0.1.10': 4},
+        },
+      );
+
+      await _open(
+          tester,
+          (_) => PeopleManagerDialog(
+                positions: [Position(id: 'pos1', name: 'Lectern')],
+                cameras: [cam],
+                heightRanges: [shortRange],
+                onSaved: () {},
+              ));
+      await tester.tap(find.byIcon(Icons.edit));
+      await tester.pumpAndSettle();
+
+      expect(find.textContaining('Defaults to Cantor (5) via height range'),
           findsOneWidget);
     });
 

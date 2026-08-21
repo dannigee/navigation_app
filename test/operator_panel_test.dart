@@ -116,7 +116,8 @@ void main() {
       expect(find.byType(FilledButton), findsNWidgets(3));
     });
 
-    testWidgets('shows custom preset name when saved', (tester) async {
+    testWidgets('shows custom preset name alongside its macro number',
+        (tester) async {
       await PresetNameStore.save('roland_', 3, 'Entrance');
       const op = OperatorProfile(
         id: 'op1',
@@ -125,7 +126,7 @@ void main() {
       );
       await tester.pumpWidget(_build(operator: op));
       await tester.pumpAndSettle();
-      expect(find.text('Entrance'), findsOneWidget);
+      expect(find.text('Entrance (3)'), findsOneWidget);
     });
 
     testWidgets('empty state mentions the operator name', (tester) async {
