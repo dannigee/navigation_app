@@ -131,6 +131,55 @@ void main() {
       await s.stop();
     });
 
+    test('a successful push does not reset a pull retry backoff', () async {
+      final firstRetry = Completer<void>();
+      final secondRetry = Completer<void>();
+      final s = BackupScheduler(
+        service: service,
+        sleep: (delay) {
+          slept.add(delay);
+          return slept.length == 1 ? firstRetry.future : secondRetry.future;
+        },
+      );
+      target.failNextWith(
+          AppFault.backup(BackupFailureKind.offline, 'pull offline'));
+
+      unawaited(s.onAppStart());
+      await Future<void>.delayed(const Duration(milliseconds: 10));
+      expect(slept, [const Duration(seconds: 30)]);
+
+      await ConfigMutationNotifier.instance.notify();
+      await s.flushPending();
+      target.failNextWith(
+          AppFault.backup(BackupFailureKind.offline, 'still offline'));
+      firstRetry.complete();
+      await Future<void>.delayed(const Duration(milliseconds: 10));
+
+      expect(slept, [
+        const Duration(seconds: 30),
+        const Duration(minutes: 1),
+      ]);
+      await s.stop();
+      secondRetry.complete();
+    });
+
+    test('app-start returns after scheduling retry rather than retaining it',
+        () async {
+      final retryMayFinish = Completer<void>();
+      final s = BackupScheduler(service: service, sleep: (_) => retryMayFinish.future);
+      var returned = false;
+      target.failNextWith(
+          AppFault.backup(BackupFailureKind.offline, 'no network'));
+
+      unawaited(s.onAppStart().then((_) => returned = true));
+      await Future<void>.delayed(const Duration(milliseconds: 10));
+
+      expect(returned, isTrue,
+          reason: 'the retry must not recursively retain its original call');
+      await s.stop();
+      retryMayFinish.complete();
+    });
+
     test('stopping during retry sleep prevents the retry', () async {
       final retryMayFinish = Completer<void>();
       final s = BackupScheduler(
@@ -147,6 +196,21 @@ void main() {
       await Future<void>.delayed(Duration.zero);
 
       expect(s.pullCount, 1);
+    });
+
+    test('stop gates work still waiting behind an earlier service operation',
+        () async {
+      final s = scheduler();
+      target.delayNextBy(const Duration(milliseconds: 60));
+
+      final first = s.onAppStart();
+      await Future<void>.delayed(const Duration(milliseconds: 10));
+      final queued = s.onAppStart();
+      await s.stop();
+      await Future.wait([first, queued]);
+
+      expect(s.pullCount, 1,
+          reason: 'the second pull was queued before stop but never started');
     });
 
     test('a fault needing a human is NOT retried on a timer', () async {
