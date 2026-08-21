@@ -28,7 +28,8 @@ that failed silently would be the same bug in a new place.
 In:
 
 - An immutable, append-only revision store on Google Drive.
-- A `BackupTarget` interface with Drive, local-directory and mock implementations.
+- A `BackupTarget` interface with Drive and mock implementations, so the engine
+  is testable without a network or a Google account.
 - A defined sync protocol: what pull does, what push does, and how the local
   provenance pointer moves.
 - An explicit import contract, because the current one is neither a full
@@ -43,19 +44,25 @@ Out:
   useless, and a free-form device label is not an audit trail. If person-level
   auditability is ever needed, that requires separate Google identities.
 - Encrypting the bundle at rest. It holds names and LAN addresses.
-- **Drive on Linux or Windows.** Assumption 3 says nobody needs it; specifying
-  a second OAuth path for it was avoidable scope and has been cut.
+- **Drive on Linux or Windows.** `google_sign_in` has no Linux support, the
+  production machines are the Mac mini and the iPad, and John develops against
+  `MockBackupTarget`. A second OAuth path for desktop Linux was avoidable scope
+  and has been cut.
+- **Any automatic local file target.** See [One target only](#one-target-only).
+  The existing manual export/import is untouched and remains the offline
+  escape hatch.
 
 ## Assumptions
 
-1. **The Mac mini has internet while driving the Roland.** `HANDOFF.md`
-   describes its Ethernet going to the Roland's isolated switch at
-   `10.0.1.100`. This design assumes a second live path. If that is wrong, see
-   [If there is no internet at church](#if-there-is-no-internet-at-church).
+1. **The Mac mini has internet while driving the Roland.** Confirmed by Daniel,
+   21 Aug 2026: WiFi is up alongside the Ethernet that runs to the Roland's
+   isolated switch. Sync can therefore run live during a service, and no
+   store-and-forward queue is needed.
 2. **The status surface is backup-only for now**, shaped so device faults can
    move into it later.
-3. **John does not need Drive on Linux.** He runs the app on the Mac mini;
-   Linux is his development machine and gets the local target.
+3. **Drive is the only backup target.** Decided by Daniel, 21 Aug 2026. There
+   is no local file target. See [One target only](#one-target-only) for what
+   that removes and what it costs.
 
 ## What the existing code actually does
 
@@ -139,7 +146,6 @@ procedure.
 lib/services/backup/
 ├── abstract/backup_target_abstract.dart   the interface
 ├── drive_backup_target.dart               googleapis drive/v3
-├── local_file_backup_target.dart          a directory; Linux dev, and manual export
 ├── mock/mock_backup_target.dart           in-memory, for tests
 ├── backup_revision.dart                   revision metadata, incl. ancestry
 ├── backup_failure.dart                    the failure taxonomy
@@ -455,34 +461,49 @@ takes the first option, in phase 3.
 - **Scope** is `drive.file` against a visible folder, not `drive.appdata`, so
   the backups can be seen and recovered by hand.
 
-## The local target
+## One target only
 
-Second-resolution filenames are **not** sufficient for append-only. Two
-instances, two clicks in one second, or a retry all collide.
+Earlier drafts specified a `LocalFileBackupTarget` writing timestamped
+revisions to a directory. It has been cut. **Drive is the backup; there is no
+second automatic target.**
 
-- Revision ids are collision-proof: timestamp plus a UUID suffix.
-- Writes are atomic: create exclusively into a temp file in the same directory,
-  flush, rename into place, then verify by re-reading and re-hashing.
-- Metadata lives in the JSON envelope. The first draft's separate sidecar file
-  added a second partial-write boundary for no benefit.
-- `latest()` **quarantines** an unparseable or partial file, logs it loudly, and
-  falls back to the next valid revision rather than treating corruption as head.
+What that removes, which is most of why it was cut:
 
-### The sandbox problem
+- **The whole sandbox problem.** The Mac app is sandboxed
+  (`macos/Runner/*.entitlements`) with no user-selected-file entitlement, so
+  `Platform.environment['HOME']` resolves *inside the app container*. An
+  operator-visible local target would have needed a directory picker, the
+  read-write entitlement, and a persistent security-scoped bookmark to survive
+  a restart, plus an iOS equivalent. That was the open decision blocking
+  phase 2, and it is now moot.
+- Atomic-write machinery for a second target: collision-proof ids, temp-file
+  and rename, post-write re-read verification, and corruption quarantine in
+  `latest()`. All of it existed only to make a local directory behave like an
+  append-only store.
 
-The Mac app is sandboxed (`macos/Runner/*.entitlements`) with **no
-user-selected-file entitlement**. `Platform.environment['HOME']` resolves inside
-the app container, so today's `$HOME/Documents` export
-(`config_bundle.dart:181-205`) and the type-a-path import
-(`settings_dialog.dart:215-248`) do not mean what they appear to mean.
+What it costs:
 
-A decision is required before phase 1 is called shippable:
+- **No fallback if Drive is unavailable.** The only offline path is the
+  existing manual export/import.
+- **John cannot exercise a real target on Linux.** He can still build and test
+  the engine, protocol and status surface against `MockBackupTarget`, which is
+  where all the difficult logic lives. He was never going to run Drive on Linux
+  regardless, since `google_sign_in` has no Linux support.
 
-- **App-private** — write into the application-support container, and state
-  plainly that it is not an operator-visible backup; or
-- **User-selected** — add a directory picker, the read-write entitlement, and a
-  persistent security-scoped bookmark so access survives a restart, with an
-  iOS equivalent defined.
+`BackupTargetAbstract` stays. It costs nothing, `MockBackupTarget` needs it, and
+it is what keeps the engine testable without a network.
+
+### The existing manual export stays as it is
+
+`ConfigBundle.writeToPath` / `readFromPath` and their settings-dialog wiring
+(`config_bundle.dart:181-205`, `settings_dialog.dart:215-248`) are **not**
+refactored onto the new interface and **not** removed. They remain the manual
+escape hatch.
+
+They carry a pre-existing bug worth writing down even though fixing it is out of
+scope here: under the sandbox, the `$HOME/Documents` path that export suggests
+and the path import asks the operator to type do not resolve where either party
+expects. That is true today, with or without this project.
 
 ## Failure taxonomy
 
@@ -559,8 +580,8 @@ not merely that something recently succeeded. A pull success never clears a
 failed push, a conflict, or dirty state; a condition clears only when that same
 condition resolves.
 
-Amber also covers the offline-queue case if assumption 1 turns out wrong, which
-is why the state model already has room for it.
+Amber is the normal resting state between an edit and the debounced upload that
+follows it, so it will be seen often and must not read as an error.
 
 ### The pill
 
@@ -667,14 +688,13 @@ bundle identity, and the keychain entitlements.
   assert the live stores are **wholly old or wholly new**, never a mix.
   Asserting merely that a retained snapshot survived would pass over the bug.
   A journal present at startup triggers rollback before anything else runs.
-- **Local target tests** — concurrent writes do not collide; a partial file is
-  quarantined rather than treated as head; atomic rename holds.
 - **Log tests** — fingerprint collapsing; all three bounds; the active condition
   survives eviction.
 - **Widget tests** — all five pill states; tappable in each; header pins;
   timestamp ladder boundaries; width cap with a pathological message.
-- **Integration** — edit, observe a revision in a `LocalFileBackupTarget`
-  directory, restart, confirm the pull restores it.
+- **Integration** — edit config, observe a revision appear in
+  `MockBackupTarget`, restart the app, confirm the pull restores it. The one
+  test that needs a real Drive account is deferred to phase 4 and run by hand.
 
 ## Phasing
 
@@ -682,37 +702,34 @@ bundle identity, and the keychain entitlements.
 1. **Foundations** — `ConfigMutationNotifier` and the eight-store refactor;
    canonical serialization; `schemaVersion` and validation; the import contract
    with its tests; the interface and `MockBackupTarget`. No new dependencies.
-2. **Local target and engine** — `LocalFileBackupTarget` with atomic writes and
-   the sandbox decision; `BackupService` with the full protocol, single-flight
-   and durable pending state, tested against the mock.
+2. **The engine** — `BackupService` with the full protocol, single-flight and
+   durable pending state, tested entirely against `MockBackupTarget`. Every
+   pull branch, the pointer transitions, fork detection and the transaction
+   journal are provable here with no network and no Google account.
 3. **Status surface** — pill, popover, log, conflict UI, revision-history
-   picker. Driven by phase 2 with faults injected by the mock.
+   picker. Driven by phase 2, with faults injected by the mock.
 4. **Drive** — `DriveBackupTarget`, auth, folder identity, ordering, checksum
-   verification. Last, because it carries every new dependency.
+   verification. Last, because it carries every new dependency and the only
+   platform risk.
 
-Phase 1 no longer claims to ship user-visible value on its own; it is
-groundwork, and pretending otherwise was how the sandbox and mutation-source
-problems stayed hidden.
+Phases 1-3 need no Google account, no network and no Apple-only dependency,
+so John can build and verify all of them on Linux. Only phase 4 is
+macOS/iOS-bound.
 
-## If there is no internet at church
-
-Uploads become store-and-forward: revisions queue locally and flush when the
-machine next reaches the internet. The amber "N changes pending" state already
-covers the display. `BackupTarget` is unaffected; `BackupService` grows a
-durable queue, which the durable-pending-work requirement already half builds.
+Phase 1 does not claim to ship user-visible value on its own; it is groundwork,
+and pretending otherwise in an earlier draft was how the mutation-source problem
+stayed hidden.
 
 ## Open questions
 
-1. **Internet at church** — assumption 1.
-2. **Device label** — a settings field the operator fills in once. Not an audit
+1. **Device label** — a settings field the operator fills in once. Not an audit
    trail; see Scope.
-3. **Local target: app-private or user-selected?** Blocks phase 2.
-4. **Does the status surface absorb device faults later?** The three known
+2. **Does the status surface absorb device faults later?** The three known
    silent failures — socket drop still reading Live, permanent ACK desync,
    wedged camera — are worse than any backup fault because they happen during a
    service. If they are ever moving here, `BackupFailure` should become a
    subtype of a broader `AppFault` **before** the log format is fixed.
-5. **Multiple macOS instances.** Two copies of the app share
+3. **Multiple macOS instances.** Two copies of the app share
    `SharedPreferences` through a cached legacy API. Either prevent a second
    instance or define reload semantics.
 
@@ -780,5 +797,10 @@ material written to address round 1. Accepted:
 Antigravity's verdict was a conditional pass; `gpt-5.6-sol`'s was not-ready,
 citing the transactionality gap. The stricter verdict was taken.
 
-Still open and deliberately not decided here: the local target's
-app-private-versus-user-selected question, which blocks phase 2.
+### Decisions taken after round 2
+
+Daniel, 21 Aug 2026: the Mac mini **does** have internet at church alongside the
+Roland Ethernet, confirming assumption 1 and removing the store-and-forward
+contingency. And **Drive is the only backup target** — the local file target is
+cut, which also retires the sandbox question that was blocking phase 2. See
+[One target only](#one-target-only).
