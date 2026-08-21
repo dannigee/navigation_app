@@ -25,10 +25,14 @@ class OperatorStore {
 
   static Future<void> saveAll(List<OperatorProfile> profiles) async {
     final prefs = await SharedPreferences.getInstance();
-    await prefs.setString(
+    final persisted = await prefs.setString(
       _operatorsKey,
       jsonEncode(profiles.map((p) => p.toJson()).toList()),
     );
+    if (!persisted) {
+      await prefs.reload();
+      throw StateError('Could not persist operator profiles');
+    }
     await ConfigMutationNotifier.instance.notify();
   }
 
@@ -39,7 +43,11 @@ class OperatorStore {
 
   static Future<void> saveActiveId(String id) async {
     final prefs = await SharedPreferences.getInstance();
-    await prefs.setString(_activeIdKey, id);
+    final persisted = await prefs.setString(_activeIdKey, id);
+    if (!persisted) {
+      await prefs.reload();
+      throw StateError('Could not persist active operator');
+    }
     await ConfigMutationNotifier.instance.notify();
   }
 }

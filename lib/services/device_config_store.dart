@@ -39,11 +39,15 @@ class DeviceConfigStore {
 
   static Future<void> save(String rolandIp, List<CameraEntry> cameras) async {
     final prefs = await SharedPreferences.getInstance();
-    await Future.wait([
+    final persisted = await Future.wait([
       prefs.setString(_rolandIpKey, rolandIp),
       prefs.setString(
           _camerasKey, jsonEncode(cameras.map((c) => c.toJson()).toList())),
     ]);
+    if (persisted.any((didPersist) => !didPersist)) {
+      await prefs.reload();
+      throw StateError('Could not persist device configuration');
+    }
     await ConfigMutationNotifier.instance.notify();
   }
 }

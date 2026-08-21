@@ -16,7 +16,9 @@ class ConfigMutationNotifier {
   static const String syncedKey = 'backup_synced_generation';
 
   final _controller = StreamController<int>.broadcast();
-  bool _suspended = false;
+  var _suspensionDepth = 0;
+
+  bool get _suspended => _suspensionDepth > 0;
 
   /// Emits the new generation each time config changes.
   Stream<int> get onMutated => _controller.stream;
@@ -38,7 +40,11 @@ class ConfigMutationNotifier {
     if (_suspended) return;
     final prefs = await SharedPreferences.getInstance();
     final next = (prefs.getInt(generationKey) ?? 0) + 1;
-    await prefs.setInt(generationKey, next);
+    final persisted = await prefs.setInt(generationKey, next);
+    if (!persisted) {
+      await prefs.reload();
+      throw StateError('Could not persist config mutation generation');
+    }
     _controller.add(next);
   }
 
@@ -49,7 +55,13 @@ class ConfigMutationNotifier {
   Future<void> markSynced(int generation) async {
     final prefs = await SharedPreferences.getInstance();
     final current = prefs.getInt(syncedKey) ?? 0;
-    if (generation > current) await prefs.setInt(syncedKey, generation);
+    if (generation > current) {
+      final persisted = await prefs.setInt(syncedKey, generation);
+      if (!persisted) {
+        await prefs.reload();
+        throw StateError('Could not persist synced config generation');
+      }
+    }
   }
 
   /// Runs [body] with notifications muted.
@@ -58,11 +70,11 @@ class ConfigMutationNotifier {
   /// applying a pulled revision emits mutation events and the scheduler
   /// debounces them into a push of what was just pulled.
   Future<T> suspendWhile<T>(Future<T> Function() body) async {
-    _suspended = true;
+    _suspensionDepth += 1;
     try {
       return await body();
     } finally {
-      _suspended = false;
+      _suspensionDepth -= 1;
     }
   }
 }

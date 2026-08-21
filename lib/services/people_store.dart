@@ -18,8 +18,12 @@ class PeopleStore {
 
   static Future<void> saveAll(List<Person> people) async {
     final prefs = await SharedPreferences.getInstance();
-    await prefs.setString(
+    final persisted = await prefs.setString(
         _key, jsonEncode(people.map((p) => p.toJson()).toList()));
+    if (!persisted) {
+      await prefs.reload();
+      throw StateError('Could not persist people');
+    }
     await ConfigMutationNotifier.instance.notify();
   }
 }

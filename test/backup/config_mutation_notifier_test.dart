@@ -3,6 +3,16 @@ import 'package:navigation_app/models/position.dart';
 import 'package:navigation_app/services/backup/config_mutation_notifier.dart';
 import 'package:navigation_app/services/position_store.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:shared_preferences_platform_interface/shared_preferences_platform_interface.dart';
+
+class _FailingSharedPreferencesStore extends InMemorySharedPreferencesStore {
+  _FailingSharedPreferencesStore([Map<String, Object> values = const {}])
+      : super.withData(values);
+
+  @override
+  Future<bool> setValue(String valueType, String key, Object value) async =>
+      false;
+}
 
 void main() {
   setUp(() => SharedPreferences.setMockInitialValues({}));
@@ -54,6 +64,40 @@ void main() {
     expect(seen, [1, 2]);
   });
 
+  test('failed generation persistence neither emits nor advances state',
+      () async {
+    SharedPreferences.resetStatic();
+    SharedPreferencesStorePlatform.instance = _FailingSharedPreferencesStore();
+    final seen = <int>[];
+    final sub = ConfigMutationNotifier.instance.onMutated.listen(seen.add);
+
+    await expectLater(
+      ConfigMutationNotifier.instance.notify(),
+      throwsA(isA<StateError>()),
+    );
+    await Future<void>.delayed(Duration.zero);
+    await sub.cancel();
+
+    expect(await ConfigMutationNotifier.instance.generation(), 0);
+    expect(seen, isEmpty);
+  });
+
+  test('failed synced persistence does not mark the generation clean',
+      () async {
+    SharedPreferences.resetStatic();
+    SharedPreferencesStorePlatform.instance = _FailingSharedPreferencesStore({
+      'flutter.${ConfigMutationNotifier.generationKey}': 1,
+    });
+
+    await expectLater(
+      ConfigMutationNotifier.instance.markSynced(1),
+      throwsA(isA<StateError>()),
+    );
+
+    expect(await ConfigMutationNotifier.instance.syncedGeneration(), 0);
+    expect(await ConfigMutationNotifier.instance.isDirty(), isTrue);
+  });
+
   group('suspendWhile', () {
     test('neither bumps the generation nor emits, so a restore is not an edit',
         () async {
@@ -81,6 +125,16 @@ void main() {
       expect(await ConfigMutationNotifier.instance.generation(), 1,
           reason: 'a failed restore must not leave notifications muted');
     });
+
+    test('keeps the outer restore suspended after an inner restore returns',
+        () async {
+      await ConfigMutationNotifier.instance.suspendWhile(() async {
+        await ConfigMutationNotifier.instance.suspendWhile(() async {});
+        await ConfigMutationNotifier.instance.notify();
+      });
+
+      expect(await ConfigMutationNotifier.instance.generation(), 0);
+    });
   });
 
   group('store wiring', () {
@@ -89,6 +143,25 @@ void main() {
       await PositionStore.saveAll([Position(id: 'p1', name: 'Ambo')]);
       expect(await ConfigMutationNotifier.instance.generation(), before + 1,
           reason: 'a store that does not report is never backed up');
+    });
+
+    test('a failed store write neither notifies nor advances generation',
+        () async {
+      SharedPreferences.resetStatic();
+      SharedPreferencesStorePlatform.instance =
+          _FailingSharedPreferencesStore();
+      final seen = <int>[];
+      final sub = ConfigMutationNotifier.instance.onMutated.listen(seen.add);
+
+      await expectLater(
+        PositionStore.saveAll([Position(id: 'p1', name: 'Ambo')]),
+        throwsA(isA<StateError>()),
+      );
+      await Future<void>.delayed(Duration.zero);
+      await sub.cancel();
+
+      expect(await ConfigMutationNotifier.instance.generation(), 0);
+      expect(seen, isEmpty);
     });
   });
 }

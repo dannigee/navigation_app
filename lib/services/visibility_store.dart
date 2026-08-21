@@ -28,8 +28,12 @@ class VisibilityStore {
     final prefs = await SharedPreferences.getInstance();
     final existing = await loadAll(deviceKey);
     existing[itemIndex] = visibility;
-    await prefs.setString(_key(deviceKey),
+    final persisted = await prefs.setString(_key(deviceKey),
         jsonEncode(existing.map((k, v) => MapEntry('$k', v.name))));
+    if (!persisted) {
+      await prefs.reload();
+      throw StateError('Could not persist item visibility');
+    }
     await ConfigMutationNotifier.instance.notify();
   }
 }

@@ -25,8 +25,12 @@ class PresetNameStore {
     } else {
       existing[presetIndex] = name;
     }
-    await prefs.setString(
+    final persisted = await prefs.setString(
         _key(cameraIp), jsonEncode(existing.map((k, v) => MapEntry('$k', v))));
+    if (!persisted) {
+      await prefs.reload();
+      throw StateError('Could not persist preset names');
+    }
     await ConfigMutationNotifier.instance.notify();
   }
 }
