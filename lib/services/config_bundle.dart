@@ -10,6 +10,9 @@ import '../models/person.dart';
 import '../models/position.dart';
 import '../models/service.dart';
 import 'backup/app_fault.dart';
+import 'backup/backup_pointer.dart';
+import 'backup/config_mutation_notifier.dart';
+import 'backup/restore_journal.dart';
 import 'device_config_store.dart';
 import 'height_range_store.dart';
 import 'operator_store.dart';
@@ -212,29 +215,95 @@ class ConfigBundle {
     );
   }
 
-  Future<void> saveToStores() async {
-    final prefs = await SharedPreferences.getInstance();
+  /// Applies this bundle to the live stores, atomically.
+  ///
+  /// Either every journalled key ends up matching this bundle, or none of
+  /// them change. [failAfterWritesForTest] throws after N writes to prove the
+  /// rollback works; every write increments the counter, so a failure can be
+  /// injected at any materialization step.
+  Future<void> applyTransactionally({int? failAfterWritesForTest}) async {
+    var written = 0;
+    void tick() {
+      written++;
+      if (failAfterWritesForTest != null && written >= failAfterWritesForTest) {
+        throw _InjectedRestoreFailure(written);
+      }
+    }
 
-    await Future.wait([
-      PositionStore.saveAll(positions),
-      PeopleStore.saveAll(people),
-      ServiceStore.saveAll(services),
-      HeightRangeStore.saveAll(heightRanges),
-      if (rolandIp != null || cameras != null)
-        DeviceConfigStore.save(
+    try {
+      await RestoreJournal.capture();
+      await ConfigMutationNotifier.instance.suspendWhile(() async {
+        final prefs = await SharedPreferences.getInstance();
+
+        await PositionStore.saveAll(positions);
+        tick();
+        await PeopleStore.saveAll(people);
+        tick();
+        await ServiceStore.saveAll(services);
+        tick();
+        await HeightRangeStore.saveAll(heightRanges);
+        tick();
+
+        // Absent means reset to defaults, not "leave the machine alone".
+        await DeviceConfigStore.save(
           rolandIp ?? DeviceConfigStore.defaultRolandIp,
           cameras ?? DeviceConfigStore.defaultCameras,
-        ),
-      if (operators != null) OperatorStore.saveAll(operators!),
-    ]);
+        );
+        tick();
+        await OperatorStore.saveAll(
+            operators ?? const [OperatorProfile.defaultProfile]);
+        tick();
 
-    for (final entry in presetNames.entries) {
-      await prefs.setString(
-          '$_presetPrefix${entry.key}', jsonEncode(entry.value));
+        // Authoritative: any device key the bundle does not mention is
+        // deleted. This is the correction to today's behaviour, where the
+        // loops only setString keys that are present and never remove others.
+        await _replacePrefixed(prefs, _presetPrefix, presetNames, tick);
+        await _replacePrefixed(prefs, _visibilityPrefix, visibilities, tick);
+      });
+
+      // Imported state is unprovenanced pending work. The engine
+      // re-establishes provenance itself after applying a fetched revision.
+      await BackupPointer.clear();
+      await RestoreJournal.clear();
+    } on _InjectedRestoreFailure {
+      await RestoreJournal.rollbackIfPresent();
+      rethrow;
+    } on StateError catch (error) {
+      await RestoreJournal.rollbackIfPresent();
+      throw AppFault.backup(
+        BackupFailureKind.storageWriteFailed,
+        'Could not persist the imported configuration.',
+        cause: error,
+      );
+    } catch (_) {
+      await RestoreJournal.rollbackIfPresent();
+      rethrow;
     }
-    for (final entry in visibilities.entries) {
-      await prefs.setString(
-          '$_visibilityPrefix${entry.key}', jsonEncode(entry.value));
+  }
+
+  static Future<void> _replacePrefixed(
+    SharedPreferences prefs,
+    String prefix,
+    Map<String, Map<String, String>> incoming,
+    void Function() tick,
+  ) async {
+    for (final k
+        in prefs.getKeys().where((k) => k.startsWith(prefix)).toList()) {
+      if (!incoming.containsKey(k.substring(prefix.length))) {
+        if (!await prefs.remove(k)) {
+          await prefs.reload();
+          throw StateError('Could not remove $k');
+        }
+        tick();
+      }
+    }
+    for (final entry in incoming.entries) {
+      if (!await prefs.setString(
+          '$prefix${entry.key}', jsonEncode(entry.value))) {
+        await prefs.reload();
+        throw StateError('Could not persist $prefix${entry.key}');
+      }
+      tick();
     }
   }
 
@@ -284,4 +353,9 @@ class ConfigBundle {
     }
     return ConfigBundle.fromJsonValidated(json);
   }
+}
+
+class _InjectedRestoreFailure extends StateError {
+  _InjectedRestoreFailure(int written)
+      : super('injected failure after $written writes');
 }

@@ -21,6 +21,7 @@ void main() {
         BackupFailureKind.authExpired,
         BackupFailureKind.permissionDenied,
         BackupFailureKind.storageFull,
+        BackupFailureKind.storageWriteFailed,
         BackupFailureKind.unsupportedSchema,
         BackupFailureKind.targetMissing,
         BackupFailureKind.malformedRemote,
@@ -42,6 +43,18 @@ void main() {
       expect(f.isRetryable, isTrue);
       expect(f.sweepOnly, isTrue,
           reason: 'a tight loop around a permanent bug burns battery forever');
+    });
+
+    test('storage write failure is distinct and requires user action', () {
+      final f =
+          AppFault.backup(BackupFailureKind.storageWriteFailed, 'write failed');
+
+      expect(f.kind, BackupFailureKind.storageWriteFailed.name);
+      expect(f.kind, isNot(BackupFailureKind.unknown.name));
+      expect(f.kind, isNot(BackupFailureKind.storageFull.name));
+      expect(f.isRetryable, isFalse);
+      expect(f.sweepOnly, isFalse);
+      expect(f.needsUserAction, isTrue);
     });
   });
 

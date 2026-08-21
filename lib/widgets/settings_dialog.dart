@@ -291,17 +291,13 @@ class SettingsDialog extends StatelessWidget {
     );
 
     if (confirmed != true || !context.mounted) return;
-    await bundle.saveToStores();
-    if (bundle.rolandIp != null || bundle.cameras != null) {
-      onDeviceConfigSaved(
-        bundle.rolandIp ?? DeviceConfigStore.defaultRolandIp,
-        bundle.cameras ?? DeviceConfigStore.defaultCameras,
-      );
-    }
-    if (bundle.operators != null) {
-      await OperatorStore.saveActiveId(OperatorProfile.defaultId);
-      onOperatorsChanged();
-    }
+    await bundle.applyTransactionally();
+    onDeviceConfigSaved(
+      bundle.rolandIp ?? DeviceConfigStore.defaultRolandIp,
+      bundle.cameras ?? DeviceConfigStore.defaultCameras,
+    );
+    await OperatorStore.saveActiveId(OperatorProfile.defaultId);
+    onOperatorsChanged();
     onAllDataChanged();
     onResponse('Configuration imported successfully');
   }

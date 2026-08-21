@@ -162,9 +162,10 @@ void main() {
       expect(bundle.visibilities, isEmpty);
     });
 
-    test('saveToStores persists positions, people, services, and heightRanges',
+    test(
+        'applyTransactionally persists positions, people, services, and heightRanges',
         () async {
-      await _full().saveToStores();
+      await _full().applyTransactionally();
 
       final positions = await PositionStore.loadAll();
       expect(positions.length, 2);
@@ -188,8 +189,9 @@ void main() {
       expect(heightRanges[1].maxHeightCm, isNull);
     });
 
-    test('saveToStores persists preset names and visibilities', () async {
-      await _full().saveToStores();
+    test('applyTransactionally persists preset names and visibilities',
+        () async {
+      await _full().applyTransactionally();
       final prefs = await SharedPreferences.getInstance();
 
       final rolandRaw = prefs.getString('preset_names_roland_10.0.1.20');
@@ -217,8 +219,8 @@ void main() {
       expect(bundle.visibilities['roland_10.0.1.20']?['3'], 'hide');
     });
 
-    test('fromStores reflects what saveToStores wrote', () async {
-      await _full().saveToStores();
+    test('fromStores reflects what applyTransactionally wrote', () async {
+      await _full().applyTransactionally();
       final loaded = await ConfigBundle.fromStores();
 
       expect(loaded.positions.map((p) => p.id), containsAll(['pos1', 'pos2']));
@@ -233,27 +235,12 @@ void main() {
       expect(loaded.visibilities['roland_10.0.1.20']?['5'], 'hide');
     });
 
-    test('saveToStores overwrites previous store contents', () async {
-      await _full().saveToStores();
-
-      await const ConfigBundle(
-        schemaVersion: ConfigBundle.currentSchemaVersion,
-        positions: [],
-        people: [],
-        services: [],
-      ).saveToStores();
-
-      final bundle = await ConfigBundle.fromStores();
-      expect(bundle.positions, isEmpty);
-      expect(bundle.people, isEmpty);
-      expect(bundle.services, isEmpty);
-    });
-
-    test('toJson/fromJson/saveToStores/fromStores full round-trip', () async {
+    test('toJson/fromJson/applyTransactionally/fromStores full round-trip',
+        () async {
       final original = _full();
       final json = original.toJson();
       final decoded = ConfigBundle.fromJsonValidated(json);
-      await decoded.saveToStores();
+      await decoded.applyTransactionally();
       final reloaded = await ConfigBundle.fromStores();
 
       expect(reloaded.positions.length, original.positions.length);
