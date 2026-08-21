@@ -6,6 +6,7 @@ import '../models/position.dart';
 import '../services/people_store.dart';
 import '../services/preset_name_store.dart';
 import '../utils/height_utils.dart';
+import '../utils/label_utils.dart';
 import '../utils/preset_resolver.dart';
 
 class PeopleManagerDialog extends StatefulWidget {
@@ -364,7 +365,9 @@ class _PeopleManagerDialogState extends State<PeopleManagerDialog> {
             const DropdownMenuItem<int?>(value: null, child: Text('—')),
             for (var n = 1; n <= 100; n++)
               DropdownMenuItem<int?>(
-                  value: n, child: Text(presetNames[n - 1] ?? '$n')),
+                value: n,
+                child: Text(formatItemLabel(presetNames[n - 1], '$n')),
+              ),
           ],
           onChanged: onChanged,
         ),
@@ -394,6 +397,12 @@ class _PeopleManagerDialogState extends State<PeopleManagerDialog> {
                     cameraIp: ip,
                     heightRanges: widget.heightRanges,
                   );
+            final heightDefaultLabel = heightDefault == null
+                ? null
+                : formatItemLabel(
+                    _presetNamesByCamera[ip]?[heightDefault],
+                    '${heightDefault + 1}',
+                    fallback: 'preset ${heightDefault + 1}');
             return Padding(
               padding: const EdgeInsets.only(bottom: 6),
               child: Column(
@@ -418,11 +427,11 @@ class _PeopleManagerDialogState extends State<PeopleManagerDialog> {
                       ),
                     ],
                   ),
-                  if (heightDefault != null)
+                  if (heightDefaultLabel != null)
                     Padding(
                       padding: const EdgeInsets.only(left: 90, top: 2),
                       child: Text(
-                        'Defaults to preset ${heightDefault + 1} via height range',
+                        'Defaults to $heightDefaultLabel via height range',
                         style: TextStyle(
                             color: Colors.blue.shade700,
                             fontSize: 11,

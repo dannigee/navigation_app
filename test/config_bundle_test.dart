@@ -9,6 +9,7 @@ import 'package:navigation_app/services/height_range_store.dart';
 import 'package:navigation_app/services/people_store.dart';
 import 'package:navigation_app/services/position_store.dart';
 import 'package:navigation_app/services/service_store.dart';
+import 'package:navigation_app/services/visibility_store.dart';
 
 ConfigBundle _full() => ConfigBundle(
       positions: [
@@ -207,6 +208,22 @@ void main() {
       final visRaw = prefs.getString('item_visibility_roland_10.0.1.20');
       expect(visRaw, isNotNull);
       expect(visRaw, contains('basic'));
+    });
+
+    test(
+        'saveToStores bumps VisibilityStore.changes so an already-mounted '
+        'OperatorPanel reloads imported visibility', () async {
+      final before = VisibilityStore.changes.value;
+      await _full().saveToStores();
+      expect(VisibilityStore.changes.value, greaterThan(before));
+    });
+
+    test('saveToStores does not bump VisibilityStore.changes when the '
+        'bundle has no visibility data', () async {
+      const bundle = ConfigBundle(positions: [], people: [], services: []);
+      final before = VisibilityStore.changes.value;
+      await bundle.saveToStores();
+      expect(VisibilityStore.changes.value, before);
     });
 
     test('fromStores reads preset names and visibilities from SharedPreferences',

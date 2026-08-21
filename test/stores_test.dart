@@ -192,30 +192,30 @@ void main() {
     });
 
     test('save then loadAll returns the saved visibility', () async {
-      await VisibilityStore.save('roland_10.0.1.20', 1, ItemVisibility.basic);
+      await VisibilityStore.save(
+          'roland_10.0.1.20', 1, ItemVisibility.hidden);
       final vis = await VisibilityStore.loadAll('roland_10.0.1.20');
-      expect(vis[1], ItemVisibility.basic);
+      expect(vis[1], ItemVisibility.hidden);
     });
 
-    test('all three ItemVisibility values round-trip', () async {
-      await VisibilityStore.save('10.0.1.10', 0, ItemVisibility.hide);
-      await VisibilityStore.save('10.0.1.10', 1, ItemVisibility.expanded);
-      await VisibilityStore.save('10.0.1.10', 2, ItemVisibility.basic);
+    test('both ItemVisibility values round-trip', () async {
+      await VisibilityStore.save('10.0.1.10', 0, ItemVisibility.hidden);
+      await VisibilityStore.save('10.0.1.10', 1, ItemVisibility.visible);
       final vis = await VisibilityStore.loadAll('10.0.1.10');
-      expect(vis[0], ItemVisibility.hide);
-      expect(vis[1], ItemVisibility.expanded);
-      expect(vis[2], ItemVisibility.basic);
+      expect(vis[0], ItemVisibility.hidden);
+      expect(vis[1], ItemVisibility.visible);
     });
 
     test('saving overwrites existing visibility', () async {
-      await VisibilityStore.save('10.0.1.10', 3, ItemVisibility.basic);
-      await VisibilityStore.save('10.0.1.10', 3, ItemVisibility.hide);
-      expect(
-          (await VisibilityStore.loadAll('10.0.1.10'))[3], ItemVisibility.hide);
+      await VisibilityStore.save('10.0.1.10', 3, ItemVisibility.visible);
+      await VisibilityStore.save('10.0.1.10', 3, ItemVisibility.hidden);
+      expect((await VisibilityStore.loadAll('10.0.1.10'))[3],
+          ItemVisibility.hidden);
     });
 
     test('different device keys do not share visibilities', () async {
-      await VisibilityStore.save('roland_10.0.1.20', 5, ItemVisibility.hide);
+      await VisibilityStore.save(
+          'roland_10.0.1.20', 5, ItemVisibility.hidden);
       expect(await VisibilityStore.loadAll('10.0.1.10'), isEmpty);
     });
   });

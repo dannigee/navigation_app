@@ -8,6 +8,7 @@ import '../models/service.dart';
 import '../services/abstract/roland_service_abstract.dart';
 import '../services/preset_name_store.dart';
 import '../services/service_store.dart';
+import '../services/visibility_store.dart';
 
 class OperatorPanel extends StatefulWidget {
   final OperatorProfile operator;
@@ -37,6 +38,7 @@ class _OperatorPanelState extends State<OperatorPanel> {
   late List<ControllableDevice> _devices;
   int _selectedDeviceIndex = 0;
   final Map<int, Map<int, String>> _namesByDevice = {};
+  final Map<int, Set<int>> _hiddenByDevice = {};
   final List<VoidCallback> _deviceListeners = [];
   final ScrollController _scrollController = ScrollController();
 
@@ -49,7 +51,11 @@ class _OperatorPanelState extends State<OperatorPanel> {
     _buildDevices();
     _setupListeners();
     _loadNames(_selectedDeviceIndex);
+    _loadVisibility(_selectedDeviceIndex);
+    VisibilityStore.changes.addListener(_onVisibilityChangedElsewhere);
   }
+
+  void _onVisibilityChangedElsewhere() => _loadVisibility(_selectedDeviceIndex);
 
   void _buildDevices() {
     _devices = [
@@ -70,6 +76,7 @@ class _OperatorPanelState extends State<OperatorPanel> {
 
   @override
   void dispose() {
+    VisibilityStore.changes.removeListener(_onVisibilityChangedElsewhere);
     _removeListeners();
     _scrollController.dispose();
     super.dispose();
@@ -100,6 +107,16 @@ class _OperatorPanelState extends State<OperatorPanel> {
     if (mounted) setState(() => _namesByDevice[deviceIndex] = names);
   }
 
+  Future<void> _loadVisibility(int deviceIndex) async {
+    final visibility =
+        await VisibilityStore.loadAll(_devices[deviceIndex].storageKey);
+    final hidden = {
+      for (final entry in visibility.entries)
+        if (entry.value == ItemVisibility.hidden) entry.key,
+    };
+    if (mounted) setState(() => _hiddenByDevice[deviceIndex] = hidden);
+  }
+
   Future<void> _refresh() async {
     final idx = _selectedDeviceIndex;
     if (mounted) setState(() {});
@@ -114,6 +131,7 @@ class _OperatorPanelState extends State<OperatorPanel> {
   void _onDeviceSelected(int index) {
     setState(() => _selectedDeviceIndex = index);
     _loadNames(index);
+    _loadVisibility(index);
     _refresh();
   }
 
@@ -192,11 +210,16 @@ class _OperatorPanelState extends State<OperatorPanel> {
 
   List<int> _visibleIndices(ControllableDevice device) {
     final allowed = widget.operator.items[device.storageKey];
-    if (allowed == null) {
-      return widget.operator.isDefault ? device.itemIndices : [];
-    }
-    final allowedSet = allowed.toSet();
-    return device.itemIndices.where(allowedSet.contains).toList();
+    final base = allowed == null
+        ? (widget.operator.isDefault ? device.itemIndices : <int>[])
+        : device.itemIndices.where(allowed.toSet().contains).toList();
+
+    // A hidden item is suppressed for every operator, including one whose
+    // allow-list explicitly names it.
+    final hidden = _hiddenByDevice[_selectedDeviceIndex] ?? const <int>{};
+    return hidden.isEmpty
+        ? base
+        : base.where((i) => !hidden.contains(i)).toList();
   }
 
   static int _optimalCols(
@@ -324,8 +347,8 @@ class _OperatorPanelState extends State<OperatorPanel> {
                                 child: Row(
                                   mainAxisAlignment: MainAxisAlignment.center,
                                   children: rowItems.asMap().entries.map((e) {
-                                    final label = names[e.value] ??
-                                        device.defaultLabel(e.value);
+                                    final label =
+                                        device.labelFor(e.value, names[e.value]);
                                     return Padding(
                                       padding: EdgeInsets.only(
                                           left: e.key == 0 ? 0 : spacing),

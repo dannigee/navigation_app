@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import '../models/panasonic_camera_config.dart';
 import '../models/controllable_device.dart';
@@ -5,6 +7,7 @@ import '../models/roland_device.dart';
 import '../models/panasonic_device.dart';
 import '../services/abstract/roland_service_abstract.dart';
 import '../services/visibility_store.dart';
+import '../utils/label_utils.dart';
 
 class MasterControlWidget extends StatefulWidget {
   final RolandServiceAbstract? rolandService;
@@ -13,6 +16,12 @@ class MasterControlWidget extends StatefulWidget {
   final List<PanasonicCameraConfig> cameras;
   final ValueChanged<String> onResponse;
 
+  /// Replaces the Roland/Panasonic devices normally built from the fields
+  /// above. Lets tests substitute fakes with controllable async timing to
+  /// exercise races between an in-flight save and a device/item switch.
+  @visibleForTesting
+  final List<ControllableDevice>? devicesOverride;
+
   const MasterControlWidget({
     super.key,
     required this.rolandService,
@@ -20,6 +29,7 @@ class MasterControlWidget extends StatefulWidget {
     required this.cameras,
     required this.onResponse,
     this.rolandIpController,
+    this.devicesOverride,
   });
 
   @override
@@ -34,31 +44,67 @@ class _MasterControlWidgetState extends State<MasterControlWidget> {
 
   final Map<int, Map<int, String>> _namesByDevice = {};
   final Map<int, Map<int, ItemVisibility>> _visibilityByDevice = {};
-  ItemVisibility _selectedVisibility = ItemVisibility.expanded;
+  ItemVisibility _selectedVisibility = ItemVisibility.visible;
 
   final TextEditingController _renameController = TextEditingController();
   final List<VoidCallback> _deviceListeners = [];
+  Timer? _renameDebounce;
+
+  // What the rename field held right after selection (or the last successful
+  // save), so a submit that doesn't actually change anything -- e.g. the
+  // field is only prefilled with the default label -- is a no-op instead of
+  // persisting that prefill as a real custom name.
+  String? _lastKnownName;
+
+  // Serializes every name-save so a flush and the autosave it preempted (or
+  // two autosaves for different items in quick succession) always persist
+  // in the order they were issued, never interleaved.
+  Future<void> _saveQueue = Future.value();
+
+  Future<void> _enqueueSave(Future<void> Function() op) {
+    final result = _saveQueue.then((_) => op());
+    _saveQueue = result.then((_) {}, onError: (_) {});
+    return result;
+  }
 
   @override
   void initState() {
     super.initState();
-    _devices = [
-      RolandDevice(
-        service: () => widget.rolandService,
-        connected: widget.rolandConnected ?? ValueNotifier(false),
-        ip: () => widget.rolandIpController?.text ?? '',
-      ),
-      ...widget.cameras.map(PanasonicDevice.new),
-    ];
+    _devices = widget.devicesOverride ??
+        [
+          RolandDevice(
+            service: () => widget.rolandService,
+            connected: widget.rolandConnected ?? ValueNotifier(false),
+            ip: () => widget.rolandIpController?.text ?? '',
+          ),
+          ...widget.cameras.map(PanasonicDevice.new),
+        ];
     _setupDeviceListeners();
     _loadDeviceMetadata(_selectedDeviceIndex);
   }
 
   @override
   void dispose() {
+    _flushPendingRename();
     _removeDeviceListeners();
     _renameController.dispose();
     super.dispose();
+  }
+
+  /// Persists a still-pending debounced rename immediately -- called before
+  /// the selection/device changes out from under it, and on dispose. Enqueued
+  /// on [_saveQueue] rather than awaited here (dispose can't await), but the
+  /// queue still guarantees this write lands before any later autosave.
+  void _flushPendingRename() {
+    if (_renameDebounce?.isActive ?? false) {
+      _renameDebounce!.cancel();
+      if (_selectedItemIndex != null) {
+        final device = _devices[_selectedDeviceIndex];
+        final index = _selectedItemIndex!;
+        final name = _renameController.text.trim();
+        _enqueueSave(() => device.saveName(index, name));
+      }
+    }
   }
 
   void _setupDeviceListeners() {
@@ -108,11 +154,13 @@ class _MasterControlWidgetState extends State<MasterControlWidget> {
   }
 
   void _onDeviceSelected(int index) {
+    _flushPendingRename();
     setState(() {
       _selectedDeviceIndex = index;
       _selectedItemIndex = null;
       _renameController.clear();
-      _selectedVisibility = ItemVisibility.expanded;
+      _lastKnownName = null;
+      _selectedVisibility = ItemVisibility.visible;
     });
     _loadDeviceMetadata(index);
     _refreshSelectedDevice();
@@ -128,44 +176,83 @@ class _MasterControlWidgetState extends State<MasterControlWidget> {
   }
 
   void _selectItem(int index) {
+    _flushPendingRename();
+    final device = _devices[_selectedDeviceIndex];
     final names = _namesByDevice[_selectedDeviceIndex] ?? {};
     final visibility = _visibilityByDevice[_selectedDeviceIndex] ?? {};
+    final label = names[index] ?? device.defaultLabel(index);
     setState(() {
       _selectedItemIndex = index;
-      _renameController.text = names[index] ?? '';
-      _selectedVisibility = visibility[index] ?? ItemVisibility.expanded;
+      _renameController.text = label;
+      _lastKnownName = label;
+      _selectedVisibility = visibility[index] ?? ItemVisibility.visible;
     });
+  }
+
+  void _onRenameChanged(String _) {
+    _renameDebounce?.cancel();
+    _renameDebounce = Timer(const Duration(milliseconds: 500), _saveRename);
+  }
+
+  void _onRenameSubmitted(String _) {
+    _renameDebounce?.cancel();
+    _saveRename();
   }
 
   Future<void> _saveRename() async {
     if (_selectedItemIndex == null) return;
-    final device = _devices[_selectedDeviceIndex];
+    final deviceIndex = _selectedDeviceIndex;
+    final device = _devices[deviceIndex];
     final index = _selectedItemIndex!;
     final name = _renameController.text.trim();
-    await device.saveName(index, name);
+    // Nothing to do if the field still holds what it was prefilled with (or
+    // what was last saved) -- otherwise submitting an unedited field would
+    // persist the default label as if it were a deliberate custom name.
+    if (name == _lastKnownName) return;
+    await _enqueueSave(() => device.saveName(index, name));
     final names = await device.loadNames();
-    if (mounted) setState(() => _namesByDevice[_selectedDeviceIndex] = names);
+    // Written into the device that was active when this save was kicked
+    // off, not whichever device happens to be selected now -- the user may
+    // have switched devices while the save/reload above were in flight.
+    if (mounted) {
+      setState(() {
+        _namesByDevice[deviceIndex] = names;
+        if (deviceIndex == _selectedDeviceIndex && index == _selectedItemIndex) {
+          _lastKnownName = name;
+        }
+      });
+    }
     widget.onResponse(
         '${device.describe(index)} renamed to "${name.isEmpty ? "(cleared)" : name}"');
   }
 
   Future<void> _saveVisibility(ItemVisibility visibility) async {
     if (_selectedItemIndex == null) return;
-    final device = _devices[_selectedDeviceIndex];
+    final deviceIndex = _selectedDeviceIndex;
+    final device = _devices[deviceIndex];
     final index = _selectedItemIndex!;
     setState(() => _selectedVisibility = visibility);
-    await device.saveVisibility(index, visibility);
+    await _enqueueSave(() => device.saveVisibility(index, visibility));
     final stored = await device.loadVisibility();
-    if (mounted) setState(() => _visibilityByDevice[_selectedDeviceIndex] = stored);
+    if (mounted) setState(() => _visibilityByDevice[deviceIndex] = stored);
+  }
+
+  /// The "Rename — X" caption text for the current selection: "name (N)"
+  /// once a custom name is saved, otherwise the device's own description
+  /// (e.g. "Preset 4") -- unlike grid buttons, this caption has room to be
+  /// descriptive rather than compact.
+  String? _captionLabel(ControllableDevice device, Map<int, String> names) {
+    final i = _selectedItemIndex;
+    if (i == null) return null;
+    return formatItemLabel(names[i], device.numberSuffix(i),
+        fallback: device.describe(i));
   }
 
   @override
   Widget build(BuildContext context) {
     final device = _devices[_selectedDeviceIndex];
     final names = _namesByDevice[_selectedDeviceIndex] ?? {};
-    final selectedLabel = _selectedItemIndex != null
-        ? (names[_selectedItemIndex] ?? device.describe(_selectedItemIndex!))
-        : null;
+    final selectedLabel = _captionLabel(device, names);
 
     return Card(
       margin: const EdgeInsets.all(8.0),
@@ -234,73 +321,64 @@ class _MasterControlWidgetState extends State<MasterControlWidget> {
             // Grid
             Expanded(child: _buildGrid(device, names)),
 
-            // Rename / Visibility section
-            const Divider(height: 24),
-            Row(
-              children: [
-                const Text('Rename',
-                    style: TextStyle(fontSize: 14, fontWeight: FontWeight.bold)),
-                if (selectedLabel != null) ...[
-                  const SizedBox(width: 8),
-                  Text('— $selectedLabel',
-                      style: const TextStyle(color: Colors.grey, fontSize: 13)),
+            // Rename / Visibility section — editing tools, so only shown
+            // in Edit Mode; outside it, tapping a button executes instead.
+            if (_editMode) ...[
+              const Divider(height: 24),
+              Row(
+                children: [
+                  const Text('Rename',
+                      style:
+                          TextStyle(fontSize: 14, fontWeight: FontWeight.bold)),
+                  if (selectedLabel != null) ...[
+                    const SizedBox(width: 8),
+                    Text('— $selectedLabel',
+                        style:
+                            const TextStyle(color: Colors.grey, fontSize: 13)),
+                  ],
                 ],
-              ],
-            ),
-            const SizedBox(height: 6),
-            if (selectedLabel == null)
-              const Padding(
-                padding: EdgeInsets.only(bottom: 6.0),
-                child: Text('Tap a button above to select it for renaming',
-                    style: TextStyle(color: Colors.grey, fontSize: 12)),
               ),
-            Row(
-              children: [
-                Expanded(
-                  child: TextField(
-                    controller: _renameController,
-                    enabled: _selectedItemIndex != null,
-                    decoration: const InputDecoration(
-                      labelText: 'Name',
-                      border: OutlineInputBorder(),
-                      isDense: true,
-                    ),
+              const SizedBox(height: 6),
+              if (selectedLabel == null)
+                const Padding(
+                  padding: EdgeInsets.only(bottom: 6.0),
+                  child: Text('Tap a button above to select it for renaming',
+                      style: TextStyle(color: Colors.grey, fontSize: 12)),
+                ),
+              TextField(
+                controller: _renameController,
+                enabled: _selectedItemIndex != null,
+                onChanged: _onRenameChanged,
+                onSubmitted: _onRenameSubmitted,
+                decoration: const InputDecoration(
+                  labelText: 'Name',
+                  border: OutlineInputBorder(),
+                  isDense: true,
+                ),
+              ),
+              const SizedBox(height: 12),
+              const Text('Visibility',
+                  style: TextStyle(fontSize: 14, fontWeight: FontWeight.bold)),
+              const SizedBox(height: 6),
+              SegmentedButton<ItemVisibility>(
+                segments: const [
+                  ButtonSegment(
+                    value: ItemVisibility.visible,
+                    label: Text('Visible'),
+                    icon: Icon(Icons.visibility),
                   ),
-                ),
-                const SizedBox(width: 8),
-                ElevatedButton(
-                  onPressed: _selectedItemIndex != null ? _saveRename : null,
-                  child: const Text('Save Name'),
-                ),
-              ],
-            ),
-            const SizedBox(height: 12),
-            const Text('Visibility',
-                style: TextStyle(fontSize: 14, fontWeight: FontWeight.bold)),
-            const SizedBox(height: 6),
-            SegmentedButton<ItemVisibility>(
-              segments: const [
-                ButtonSegment(
-                  value: ItemVisibility.hide,
-                  label: Text('Hide'),
-                  icon: Icon(Icons.visibility_off),
-                ),
-                ButtonSegment(
-                  value: ItemVisibility.expanded,
-                  label: Text('Expanded'),
-                  icon: Icon(Icons.dashboard_customize),
-                ),
-                ButtonSegment(
-                  value: ItemVisibility.basic,
-                  label: Text('Basic'),
-                  icon: Icon(Icons.view_agenda),
-                ),
-              ],
-              selected: {_selectedVisibility},
-              onSelectionChanged: _selectedItemIndex != null
-                  ? (selection) => _saveVisibility(selection.first)
-                  : null,
-            ),
+                  ButtonSegment(
+                    value: ItemVisibility.hidden,
+                    label: Text('Hidden'),
+                    icon: Icon(Icons.visibility_off),
+                  ),
+                ],
+                selected: {_selectedVisibility},
+                onSelectionChanged: _selectedItemIndex != null
+                    ? (selection) => _saveVisibility(selection.first)
+                    : null,
+              ),
+            ],
           ],
         ),
       ),
@@ -321,30 +399,27 @@ class _MasterControlWidgetState extends State<MasterControlWidget> {
       mainAxisSpacing: 4,
       crossAxisSpacing: 4,
       children: indices.map((index) {
-        final label = names[index] ?? device.defaultLabel(index);
+        final label = device.labelFor(index, names[index]);
         final isSelected = _selectedItemIndex == index;
-        return Tooltip(
-          message: label,
-          child: FilledButton(
-            style: FilledButton.styleFrom(
-              shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(8.0)),
-              padding: EdgeInsets.zero,
-              tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-              textStyle: const TextStyle(fontSize: 12),
-              backgroundColor:
-                  isSelected ? Theme.of(context).colorScheme.tertiary : null,
-            ),
-            onPressed: () {
-              if (_editMode) {
-                _selectItem(index);
-                return;
-              }
-              _executeSelected(index);
-              _selectItem(index);
-            },
-            child: Text(label),
+        return FilledButton(
+          style: FilledButton.styleFrom(
+            shape:
+                RoundedRectangleBorder(borderRadius: BorderRadius.circular(8.0)),
+            padding: EdgeInsets.zero,
+            tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+            textStyle: const TextStyle(fontSize: 12),
+            backgroundColor:
+                isSelected ? Theme.of(context).colorScheme.tertiary : null,
           ),
+          onPressed: () {
+            if (_editMode) {
+              _selectItem(index);
+              return;
+            }
+            _executeSelected(index);
+            _selectItem(index);
+          },
+          child: Text(label),
         );
       }).toList(),
     );

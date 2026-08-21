@@ -15,6 +15,7 @@ import 'operator_store.dart';
 import 'people_store.dart';
 import 'position_store.dart';
 import 'service_store.dart';
+import 'visibility_store.dart';
 
 class ConfigBundle {
   final List<Position> positions;
@@ -101,7 +102,6 @@ class ConfigBundle {
   }
 
   static const _presetPrefix = 'preset_names_';
-  static const _visibilityPrefix = 'item_visibility_';
 
   static Future<ConfigBundle> fromStores() async {
     final results = await Future.wait([
@@ -124,8 +124,8 @@ class ConfigBundle {
           presetNames[deviceKey] =
               decoded.map((k, v) => MapEntry(k, v as String));
         }
-      } else if (key.startsWith(_visibilityPrefix)) {
-        final deviceKey = key.substring(_visibilityPrefix.length);
+      } else if (key.startsWith(VisibilityStore.keyPrefix)) {
+        final deviceKey = key.substring(VisibilityStore.keyPrefix.length);
         final raw = prefs.getString(key);
         if (raw != null) {
           final decoded = jsonDecode(raw) as Map<String, dynamic>;
@@ -173,8 +173,7 @@ class ConfigBundle {
           '$_presetPrefix${entry.key}', jsonEncode(entry.value));
     }
     for (final entry in visibilities.entries) {
-      await prefs.setString(
-          '$_visibilityPrefix${entry.key}', jsonEncode(entry.value));
+      await VisibilityStore.saveRawJson(entry.key, jsonEncode(entry.value));
     }
   }
 

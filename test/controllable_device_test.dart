@@ -40,4 +40,44 @@ void main() {
       expect(step.id, isNotEmpty);
     });
   });
+
+  group('RolandDevice.labelFor', () {
+    final device = RolandDevice(
+      service: () => null,
+      connected: ValueNotifier(false),
+      ip: () => '10.0.1.20',
+    );
+
+    test('combines a custom name with the macro number', () {
+      expect(device.labelFor(13, 'Opening Wide'), 'Opening Wide (13)');
+    });
+
+    test('falls back to the default label when no name is set', () {
+      expect(device.labelFor(13, null), 'Macro 13');
+    });
+
+    test('falls back to the default label when the name is blank', () {
+      expect(device.labelFor(13, ''), 'Macro 13');
+    });
+  });
+
+  group('PanasonicDevice.labelFor', () {
+    late PanasonicCameraConfig camera;
+    late PanasonicDevice device;
+
+    setUp(() {
+      camera = PanasonicCameraConfig(name: 'Wide', ipAddress: '10.0.1.11');
+      device = PanasonicDevice(camera);
+    });
+    tearDown(() => camera.dispose());
+
+    test('combines a custom name with the 1-based preset number', () {
+      // index 3 is preset 4 (0-based storage, 1-based display).
+      expect(device.labelFor(3, 'Cantor'), 'Cantor (4)');
+    });
+
+    test('falls back to the default label when no name is set', () {
+      expect(device.labelFor(3, null), device.defaultLabel(3));
+    });
+  });
 }
