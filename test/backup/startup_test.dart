@@ -29,6 +29,18 @@ void main() {
       SingleInstance.release();
       expect(SingleInstance.claim(), isTrue);
     });
+
+    test('the OS lock refuses another process and releaseForTest frees it',
+        () async {
+      expect(SingleInstance.claim(), isTrue);
+      expect(await _claimFromSeparateProcess(), isFalse,
+          reason: 'this must be the operating-system lock, not our flag');
+
+      SingleInstance.releaseForTest();
+
+      expect(await _claimFromSeparateProcess(), isTrue,
+          reason: 'the test seam must close the actual held file handle');
+    });
   });
 
   group('journal rollback', () {
@@ -64,4 +76,32 @@ void main() {
           lessThan(source.indexOf('runApp')));
     });
   });
+}
+
+Future<bool> _claimFromSeparateProcess() async {
+  final directory = await Directory.systemTemp.createTemp('single-instance-');
+  final helper = File('${directory.path}/claim.dart');
+  await helper.writeAsString('''
+import 'dart:io';
+
+import 'package:navigation_app/services/backup/single_instance.dart';
+
+void main() {
+  final claimed = SingleInstance.claim();
+  stdout.write(claimed);
+  SingleInstance.release();
+}
+''');
+
+  try {
+    final result = await Process.run(
+      'dart',
+      ['--packages=${Directory.current.path}/.dart_tool/package_config.json', helper.path],
+      workingDirectory: Directory.current.path,
+    );
+    expect(result.exitCode, 0, reason: result.stderr as String);
+    return (result.stdout as String).trim() == 'true';
+  } finally {
+    await directory.delete(recursive: true);
+  }
 }

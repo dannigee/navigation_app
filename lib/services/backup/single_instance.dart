@@ -14,14 +14,20 @@ class SingleInstance {
   /// instance already holds the lock.
   static bool claim() {
     if (_claimedInProcess) return false;
+    RandomAccessFile? raf;
     try {
       final file = File('${Directory.systemTemp.path}/navigation_app.lock');
-      final raf = file.openSync(mode: FileMode.write);
+      raf = file.openSync(mode: FileMode.write);
       raf.lockSync(FileLock.exclusive);
       _held = raf;
       _claimedInProcess = true;
       return true;
     } on FileSystemException {
+      try {
+        raf?.closeSync();
+      } on FileSystemException {
+        // Lock acquisition already failed; there is nothing further to claim.
+      }
       return false;
     }
   }
@@ -37,9 +43,8 @@ class SingleInstance {
     _claimedInProcess = false;
   }
 
-  /// Test seam: drops in-process state without touching the filesystem lock.
+  /// Test seam: releases the actual lock and clears in-process state.
   static void releaseForTest() {
-    _held = null;
-    _claimedInProcess = false;
+    release();
   }
 }
