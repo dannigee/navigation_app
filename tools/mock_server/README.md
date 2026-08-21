@@ -58,6 +58,30 @@ sudo ifconfig lo0 -alias 127.0.0.3
 sudo ifconfig lo0 -alias 127.0.0.4
 ```
 
+### On Linux
+
+The aliasing above is macOS-only and the rig skips it: `AliasManager.ensure`
+(`mockrig/netsetup.py:34`) checks `platform.system() == "Darwin"` first, logs
+`Loopback aliasing is macOS-only; skipping on Linux`, and returns. `teardown()`
+then iterates an empty list, so `ifconfig` is never invoked at all. There is
+nothing to clean up by hand.
+
+Nothing is lost by skipping it. Linux puts `127.0.0.1/8` on `lo`, so the whole
+`127.0.0.0/8` is already local and the cameras bind on `127.0.0.2-4` without
+any alias being added. Root is still needed for port 80:
+
+```bash
+sudo python3 tools/mock_server/run.py
+```
+
+Everything else in the rig is standard-library sockets and HTTP, so it runs
+unchanged. The one piece that does not carry over is `drive_macos_app.sh`,
+which uses AppleScript and `cliclick` to click the built macOS app; nothing
+else depends on it, and `verify.dart` and `chaos_demo.dart` do not.
+
+Not yet exercised on Linux — this is read off the guard in `netsetup.py` and
+standard loopback behaviour, not a run we have done.
+
 ## Verifying it
 
 `verify.dart` drives the rig using the app's **real** `RolandService` and
@@ -188,11 +212,24 @@ Documented because they matter if anyone diffs this against a real V-160HD:
 2. **Camera pan/tilt/zoom are normalised** (`-1.0..1.0`, zoom `1.0..4.0`)
    instead of the AW hex ranges. The app only recalls presets, never drives
    absolute position, so the normalised space exists purely for the inspector.
-3. **The mock is built from the client's beliefs about the protocol.** Where
-   the app's reverse-engineering is wrong, this will faithfully reproduce the
-   same wrong assumption and report success. It de-risks the disconnect,
-   deadlock and desync classes of bug; it does not replace verification against
-   real hardware.
+3. **The mock is built from the client's beliefs about the protocol** — but
+   those beliefs were checked against the physical switcher. The last changes
+   to either wire-facing service were `babe567` (19 Jun 2026) and `42782e3` /
+   `34eed0a` / `10a81b6` (29 Jun 2026), authored from the church AV machine
+   while working against the real V-160HD and cameras. `roland_service.dart`
+   and `panasonic_service.dart` have not been touched since; everything after
+   that date is UI, settings, tooling or build. So the grammar this mock
+   answers is the grammar that was last observed to work on real hardware,
+   not a guess.
+
+   Two gaps survive that. Firmware moves — the observations were made against
+   3.41.312, and the rig has no way to notice if a later firmware changes a
+   response. And the mock only models commands the app actually sends, so a
+   path the app has never exercised live is unverified no matter how green
+   `verify.dart` runs. Deviation 1 below is a known, deliberate divergence.
+   The rig de-risks the disconnect, deadlock and desync classes of bug
+   thoroughly; treat protocol conformance as inherited evidence with a date
+   on it.
 4. **Preset names containing spaces will fail** — `_encodeCommand`
    (`panasonic_service.dart:379`) percent-encodes only `#`, so a name with a
    space produces a malformed request line. That is a real client bug and is
