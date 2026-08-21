@@ -59,8 +59,11 @@ Out:
    21 Aug 2026: WiFi is up alongside the Ethernet that runs to the Roland's
    isolated switch. Sync can therefore run live during a service, and no
    store-and-forward queue is needed.
-2. **The status surface is backup-only for now**, shaped so device faults can
-   move into it later.
+2. **The pill is the single surface for every failure and warning in the app**,
+   not just backup. Decided by Daniel, 21 Aug 2026. Backup is the first tenant;
+   device faults follow in phase 5. This is why the fault type and the log are
+   general from day one — see [One surface for every
+   fault](#one-surface-for-every-fault).
 3. **Drive is the only backup target.** Decided by Daniel, 21 Aug 2026. There
    is no local file target. See [One target only](#one-target-only) for what
    that removes and what it costs.
@@ -193,7 +196,8 @@ forced all three implementations to grow a specialised parent-query when
 `list(limit: 10)` and a filter in `BackupService` answers the same question.
 
 `put` takes serialized JSON so that hashing, serialization and transport each
-have one owner. Everything throws `BackupFailure` and nothing else.
+have one owner. Everything throws an `AppFault` in the `backup` domain and
+nothing else; implementations translate their own exceptions at the boundary.
 
 There is no `ping()`. The previous draft had one and then argued three sections
 later that no liveness probe was needed, because the pull already is one.
@@ -509,7 +513,33 @@ scope here: under the sandbox, the `$HOME/Documents` path that export suggests
 and the path import asks the operator to type do not resolve where either party
 expects. That is true today, with or without this project.
 
+## One surface for every fault
+
+Every failure and warning in this app belongs in the pill. Backup is simply the
+first thing wired into it.
+
+That decision costs almost nothing today and would cost a migration later. The
+log is persisted to `SharedPreferences` on the production machine; once it holds
+a year of real entries, changing the shape of an entry means migrating saved
+data. So the type is general from the start:
+
+```dart
+class AppFault {
+  final FaultDomain domain;   // backup, roland, camera
+  final String kind;          // domain-specific, stable, never free text
+  final String message;
+  final Object? cause;
+  bool get isRetryable;
+  bool get needsUserAction;
+}
+```
+
+Only `FaultDomain.backup` is implemented in phases 1-4. The other two domains
+exist as enum values and nothing more until phase 5.
+
 ## Failure taxonomy
+
+Backup-domain kinds:
 
 ```dart
 enum BackupFailureKind {
@@ -713,8 +743,10 @@ bundle identity, and the keychain entitlements.
 3. **Status surface** — pill, popover, log, conflict UI, revision-history
    picker. Driven by phase 2, with faults injected by the mock.
 4. **Drive** — `DriveBackupTarget`, auth, folder identity, ordering, checksum
-   verification. Last, because it carries every new dependency and the only
-   platform risk.
+   verification. Carries every new dependency and the only platform risk.
+5. **Device faults into the pill** — surface Roland and camera connection state
+   through the same `AppFault` surface, so a dropped switcher stops reading
+   **Live**. Scope and its limits are below.
 
 Phases 1-3 need no Google account, no network and no Apple-only dependency,
 so John can build and verify all of them on Linux. Only phase 4 is
@@ -724,14 +756,42 @@ Phase 1 does not claim to ship user-visible value on its own; it is groundwork,
 and pretending otherwise in an earlier draft was how the mutation-source problem
 stayed hidden.
 
+### Phase 5 in detail, and what it is not
+
+Phase 5 is **not** a UI task. The pill can only report what the app knows, and
+today the app knows almost nothing about its own devices.
+
+What has to be built:
+
+- **`RolandService` has no public connection state at all.** It flips a private
+  `_isConnected` on socket error (`roland_service.dart:1707`) and never tells
+  anyone. It needs a connection-state stream.
+- **Device responses are discarded.** Every one is routed into an empty closure
+  (`multi_device_control_page.dart:294-325`), so success and failure are
+  literally indistinguishable to the UI.
+- **`PanasonicService` needs the same**, plus a way to report a camera that has
+  stopped answering.
+- A `roland` and `camera` `FaultDomain` mapping, and warning-level states —
+  device faults include conditions that are degradations rather than failures,
+  which is why `AppFault` covers "warning" and not only "error".
+
+What phase 5 explicitly does **not** do, and must not be sold as doing: it does
+not fix the three underlying bugs. The permanent ACK desync
+(`roland_service.dart:1839`, `:1923`), the absent reconnect
+(`:1783`), and the camera command-queue deadlock
+(`panasonic_service.dart:88`, `:113`) are their own project. Phase 5 makes the
+app *report* that it has become useless; it does not make it recover.
+
+That distinction matters at the point of use. After phase 5 the operator learns
+the switcher is gone instead of pressing dead buttons — a real improvement — but
+the fix is still to restart. Anyone reading this spec should not expect
+otherwise, and `chaos_demo.dart` already reproduces all three on demand for
+whoever takes that project on.
+
 ## Open questions
 
-1. **Does the status surface absorb device faults later?** The three known
-   silent failures — socket drop still reading Live, permanent ACK desync,
-   wedged camera — are worse than any backup fault because they happen during a
-   service. If they are ever moving here, `BackupFailure` should become a
-   subtype of a broader `AppFault` **before** the log format is fixed.
-2. *(resolved — see Decisions taken after round 2.)*
+None blocking. Everything raised in two review rounds is either decided above or
+explicitly out of scope.
 
 ## Review history
 
