@@ -103,7 +103,8 @@ class BackupService {
     return p.matchesTarget(targetIdentity) ? p : const BackupPointer();
   }
 
-  Future<PullResult> pull() => _single(_pull);
+  Future<PullResult> pull() =>
+      _single(() => _withStorageBoundary('pull', _pull));
 
   Future<PullResult> _pull() async {
     // 1. Metadata only. A pointer from another target is meaningless.
@@ -119,6 +120,7 @@ class BackupService {
       return const PullResult(PullOutcome.targetEmptied);
     }
 
+    final localGeneration = await ConfigMutationNotifier.instance.generation();
     final localBundle = await readBundleJson();
     final localJson = canonicalJsonEncode(localBundle);
     final localHash = canonicalHash(localBundle);
@@ -129,8 +131,15 @@ class BackupService {
       if (!await localIsPristine()) {
         return PullResult(PullOutcome.needsAdoptionChoice, revision: head);
       }
-      await _applyRevision(head);
-      return PullResult(PullOutcome.adopted, revision: head);
+      final applied = await _applyRevision(
+        head,
+        expectedLocalHash: localHash,
+        expectedGeneration: localGeneration,
+      );
+      return PullResult(
+        applied ? PullOutcome.adopted : PullOutcome.needsAdoptionChoice,
+        revision: head,
+      );
     }
 
     // 4. Remote has not moved.
@@ -155,15 +164,26 @@ class BackupService {
     //    says nothing about whether remote descends from it.
     if (head.parentRevisionId == pointer.revisionId &&
         pointer.isCleanAgainst(localHash)) {
-      await _applyRevision(head);
-      return PullResult(PullOutcome.applied, revision: head);
+      final applied = await _applyRevision(
+        head,
+        expectedLocalHash: localHash,
+        expectedGeneration: localGeneration,
+      );
+      return PullResult(
+        applied ? PullOutcome.applied : PullOutcome.conflict,
+        revision: head,
+      );
     }
 
     // 7. Diverged, or local is dirty. Surface it; never a modal.
     return PullResult(PullOutcome.conflict, revision: head);
   }
 
-  Future<void> _applyRevision(BackupRevision revision) async {
+  Future<bool> _applyRevision(
+    BackupRevision revision, {
+    required String expectedLocalHash,
+    required int expectedGeneration,
+  }) async {
     final raw = await target.fetch(revision);
 
     final Object? decoded;
@@ -189,7 +209,14 @@ class BackupService {
 
     // Throws AppFault on anything malformed, before a single store is touched.
     final bundle = ConfigBundle.fromJsonValidated(decoded);
-    await bundle.applyTransactionally();
+    final currentGeneration =
+        await ConfigMutationNotifier.instance.generation();
+    final currentLocalHash = canonicalHash(await readBundleJson());
+    if (currentGeneration != expectedGeneration ||
+        currentLocalHash != expectedLocalHash) {
+      return false;
+    }
+    await bundle.applyTransactionally(markAsPending: false);
 
     // applyTransactionally deliberately clears the pointer, because an import
     // is unprovenanced. Applying a fetched revision is the one case where we
@@ -199,11 +226,12 @@ class BackupService {
       recordedHash: canonicalHash(decoded),
       targetIdentity: targetIdentity,
     );
-    await ConfigMutationNotifier.instance
-        .markSynced(await ConfigMutationNotifier.instance.generation());
+    await ConfigMutationNotifier.instance.markSynced(expectedGeneration);
+    return true;
   }
 
-  Future<PushResult> push() => _single(_push);
+  Future<PushResult> push() =>
+      _single(() => _withStorageBoundary('push', _push));
 
   Future<PushResult> _push() async {
     final generation = await ConfigMutationNotifier.instance.generation();
@@ -214,6 +242,16 @@ class BackupService {
 
     final head = await target.latest();
     final pointer = await _pointer();
+
+    if (head == null && pointer.isProvenanced) {
+      await BackupPointer.clear();
+      throw AppFault.backup(
+        BackupFailureKind.targetMissing,
+        'The backup revision this device last synced no longer exists.',
+        operation: 'push',
+        targetIdentity: targetIdentity,
+      );
+    }
 
     // 1. The bytes are already there. Judged by the SERVER checksum: the
     //    contentHash we wrote is client metadata and goes stale if the file
@@ -265,5 +303,24 @@ class BackupService {
     }
 
     return PushResult(PushOutcome.uploaded, revision: revision);
+  }
+
+  Future<T> _withStorageBoundary<T>(
+    String operation,
+    Future<T> Function() action,
+  ) async {
+    try {
+      return await action();
+    } on AppFault {
+      rethrow;
+    } on StateError catch (error) {
+      throw AppFault.backup(
+        BackupFailureKind.storageWriteFailed,
+        'Could not persist backup state during $operation.',
+        operation: operation,
+        targetIdentity: targetIdentity,
+        cause: error,
+      );
+    }
   }
 }

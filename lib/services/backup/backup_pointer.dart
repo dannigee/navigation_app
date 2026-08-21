@@ -14,7 +14,8 @@ class BackupPointer {
   final String? recordedHash;
   final String? targetIdentity;
 
-  const BackupPointer({this.revisionId, this.recordedHash, this.targetIdentity});
+  const BackupPointer(
+      {this.revisionId, this.recordedHash, this.targetIdentity});
 
   bool get isProvenanced => revisionId != null;
 
@@ -43,9 +44,12 @@ class BackupPointer {
     required String targetIdentity,
   }) async {
     final prefs = await SharedPreferences.getInstance();
-    await prefs.setString(revisionKey, revisionId);
-    await prefs.setString(hashKey, recordedHash);
-    await prefs.setString(targetKey, targetIdentity);
+    await _requirePersisted(
+        prefs.setString(revisionKey, revisionId), prefs, 'revision');
+    await _requirePersisted(
+        prefs.setString(hashKey, recordedHash), prefs, 'content hash');
+    await _requirePersisted(
+        prefs.setString(targetKey, targetIdentity), prefs, 'target identity');
   }
 
   static Future<void> clear() async {
@@ -55,6 +59,17 @@ class BackupPointer {
         await prefs.reload();
         throw StateError('Could not clear backup provenance');
       }
+    }
+  }
+
+  static Future<void> _requirePersisted(
+    Future<bool> write,
+    SharedPreferences prefs,
+    String field,
+  ) async {
+    if (!await write) {
+      await prefs.reload();
+      throw StateError('Could not persist backup provenance $field');
     }
   }
 }

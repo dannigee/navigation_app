@@ -1,12 +1,24 @@
 import 'package:flutter_test/flutter_test.dart';
+import 'package:navigation_app/services/backup/app_fault.dart';
 import 'package:navigation_app/services/backup/backup_pointer.dart';
 import 'package:navigation_app/services/backup/backup_service.dart';
 import 'package:navigation_app/services/backup/canonical_json.dart';
 import 'package:navigation_app/services/backup/config_mutation_notifier.dart';
 import 'package:navigation_app/services/backup/mock/mock_backup_target.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:shared_preferences_platform_interface/shared_preferences_platform_interface.dart';
 
 const identity = 'folder-A';
+
+class _RefusePointerWriteStore extends InMemorySharedPreferencesStore {
+  _RefusePointerWriteStore(Map<String, Object> values) : super.withData(values);
+
+  @override
+  Future<bool> setValue(String valueType, String key, Object value) async {
+    if (key == 'flutter.${BackupPointer.revisionKey}') return false;
+    return super.setValue(valueType, key, value);
+  }
+}
 
 Map<String, dynamic> doc([String marker = 'base']) => {
       'schemaVersion': 1,
@@ -133,5 +145,54 @@ void main() {
 
     expect(await ConfigMutationNotifier.instance.isDirty(), isTrue,
         reason: 'the push only covered the generation it read');
+  });
+
+  test('a deleted remote under an existing pointer is not recreated', () async {
+    await ConfigMutationNotifier.instance.notify();
+    await BackupPointer.save(
+        revisionId: 'deleted-rev',
+        recordedHash: canonicalHash(doc()),
+        targetIdentity: identity);
+
+    await expectLater(
+      service(doc('edited')).push(),
+      throwsA(
+        isA<AppFault>()
+            .having((fault) => fault.kind, 'kind',
+                BackupFailureKind.targetMissing.name)
+            .having((fault) => fault.operation, 'operation', 'push'),
+      ),
+    );
+
+    expect(target.revisions, isEmpty,
+        reason: 'push must not recreate deletion');
+    expect((await BackupPointer.load()).isProvenanced, isFalse,
+        reason: 'the deleted durable head is no longer valid provenance');
+    expect(await ConfigMutationNotifier.instance.isDirty(), isTrue,
+        reason: 'local work remains pending after the remote loss');
+  });
+
+  test('a refused pointer write fails push and leaves the edit pending',
+      () async {
+    SharedPreferences.resetStatic();
+    SharedPreferencesStorePlatform.instance = _RefusePointerWriteStore({
+      'flutter.${ConfigMutationNotifier.generationKey}': 1,
+    });
+    addTearDown(() => SharedPreferences.setMockInitialValues({}));
+
+    await expectLater(
+      service(doc()).push(),
+      throwsA(
+        isA<AppFault>()
+            .having((fault) => fault.kind, 'kind',
+                BackupFailureKind.storageWriteFailed.name)
+            .having((fault) => fault.cause, 'cause', isA<StateError>()),
+      ),
+    );
+
+    expect(target.revisions, hasLength(1),
+        reason: 'the remote upload happened before local persistence failed');
+    expect(await ConfigMutationNotifier.instance.isDirty(), isTrue,
+        reason: 'a failed provenance write must not mark the upload synced');
   });
 }

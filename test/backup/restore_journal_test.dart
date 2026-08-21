@@ -298,7 +298,7 @@ void main() {
   });
 
   group('side effects', () {
-    test('applying does NOT count as a user edit', () async {
+    test('manual import becomes one durable pending edit', () async {
       await OperatorStore.saveActiveId('operator-who-will-not-exist');
       final seen = <int>[];
       final sub = ConfigMutationNotifier.instance.onMutated.listen(seen.add);
@@ -307,11 +307,27 @@ void main() {
 
       await Future<void>.delayed(Duration.zero);
       await sub.cancel();
-      expect(seen, isEmpty,
-          reason:
-              'a restore that looks like an edit gets pushed straight back');
+      expect(seen, [2],
+          reason: 'generation 1 was the setup edit before listening');
+      expect(await ConfigMutationNotifier.instance.isDirty(), isTrue,
+          reason: 'a manual import must survive termination before its push');
       expect(await OperatorStore.loadActiveId(), OperatorProfile.defaultId,
           reason: 'the operator reset belongs inside the suspended apply');
+    });
+
+    test('applying a fetched revision does not count as a local edit',
+        () async {
+      final seen = <int>[];
+      final sub = ConfigMutationNotifier.instance.onMutated.listen(seen.add);
+
+      await ConfigBundle.fromJsonValidated(bundleJson())
+          .applyTransactionally(markAsPending: false);
+
+      await Future<void>.delayed(Duration.zero);
+      await sub.cancel();
+      expect(seen, isEmpty,
+          reason: 'a fetched restore must not schedule itself for upload');
+      expect(await ConfigMutationNotifier.instance.isDirty(), isFalse);
     });
 
     test('applying clears the provenance pointer', () async {

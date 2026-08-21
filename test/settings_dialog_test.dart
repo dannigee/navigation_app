@@ -103,7 +103,7 @@ void main() {
     expect(stored.single.maxHeightCm, feetInchesToCm(5, 0));
   });
 
-  testWidgets('import commits the active-operator reset without an edit event',
+  testWidgets('import commits the active-operator reset as pending work',
       (tester) async {
     late final Directory tempDir;
     late final File configFile;
@@ -151,7 +151,9 @@ void main() {
 
     expect(response, 'Configuration imported successfully');
     expect(await OperatorStore.loadActiveId(), OperatorProfile.defaultId);
-    expect(seen, isEmpty,
-        reason: 'an import must not schedule a push of what it just applied');
+    expect(seen, [2],
+        reason: 'the prior operator edit was generation 1; import is one edit');
+    expect(await ConfigMutationNotifier.instance.isDirty(), isTrue,
+        reason: 'manual import must remain pending across app termination');
   });
 }

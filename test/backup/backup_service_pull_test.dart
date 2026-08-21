@@ -1,12 +1,15 @@
 import 'dart:convert';
 
 import 'package:flutter_test/flutter_test.dart';
+import 'package:navigation_app/models/position.dart';
 import 'package:navigation_app/services/backup/app_fault.dart';
 import 'package:navigation_app/services/backup/backup_pointer.dart';
 import 'package:navigation_app/services/backup/backup_revision.dart';
 import 'package:navigation_app/services/backup/backup_service.dart';
 import 'package:navigation_app/services/backup/canonical_json.dart';
+import 'package:navigation_app/services/backup/config_mutation_notifier.dart';
 import 'package:navigation_app/services/backup/mock/mock_backup_target.dart';
+import 'package:navigation_app/services/config_bundle.dart';
 import 'package:navigation_app/services/position_store.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:shared_preferences_platform_interface/shared_preferences_platform_interface.dart';
@@ -265,5 +268,79 @@ void main() {
         reason: 'a failed apply must not advance provenance to ${next.id}');
     expect(pointer.recordedHash, canonicalHash(doc('base')));
     expect(pointer.targetIdentity, identity);
+  });
+
+  test('an edit arriving while a revision is fetched is not overwritten',
+      () async {
+    await PositionStore.saveAll([
+      Position(id: 'base', name: 'base'),
+    ]);
+    final local = (await ConfigBundle.fromStores()).toJson();
+    final base = await remotePut(doc('base'));
+    await BackupPointer.save(
+        revisionId: base.id,
+        recordedHash: canonicalHash(local),
+        targetIdentity: identity);
+    final next = await remotePut(doc('remote'), parent: base.id);
+    target.beforeNextFetch(() async {
+      await PositionStore.saveAll([
+        Position(id: 'external', name: 'external'),
+      ]);
+    });
+    final svc = BackupService(
+      target: target,
+      targetIdentity: identity,
+      deviceLabel: () async => 'Mac mini',
+      readBundleJson: () async => (await ConfigBundle.fromStores()).toJson(),
+      localIsPristine: () async => false,
+    );
+
+    final result = await svc.pull();
+
+    expect(result.outcome, PullOutcome.conflict);
+    expect((await PositionStore.loadAll()).single.id, 'external');
+    expect((await BackupPointer.load()).revisionId, base.id);
+    expect(await ConfigMutationNotifier.instance.isDirty(), isTrue,
+        reason: 'the concurrent edit is still durable pending work');
+    expect(result.revision, next);
+  });
+
+  test('a hash change during fetch is caught even without a mutation event',
+      () async {
+    await PositionStore.saveAll([
+      Position(id: 'base', name: 'base'),
+    ]);
+    final local = (await ConfigBundle.fromStores()).toJson();
+    final base = await remotePut(doc('base'));
+    await BackupPointer.save(
+        revisionId: base.id,
+        recordedHash: canonicalHash(local),
+        targetIdentity: identity);
+    final next = await remotePut(doc('remote'), parent: base.id);
+    final generation = await ConfigMutationNotifier.instance.generation();
+    target.beforeNextFetch(() async {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString(
+          'positions',
+          jsonEncode([
+            {'id': 'external', 'name': 'external'}
+          ]));
+    });
+    final svc = BackupService(
+      target: target,
+      targetIdentity: identity,
+      deviceLabel: () async => 'Mac mini',
+      readBundleJson: () async => (await ConfigBundle.fromStores()).toJson(),
+      localIsPristine: () async => false,
+    );
+
+    final result = await svc.pull();
+
+    expect(result.outcome, PullOutcome.conflict);
+    expect((await PositionStore.loadAll()).single.id, 'external');
+    expect((await BackupPointer.load()).revisionId, base.id);
+    expect(await ConfigMutationNotifier.instance.generation(), generation,
+        reason: 'the hash guard, not the notifier, caught this write');
+    expect(result.revision, next);
   });
 }

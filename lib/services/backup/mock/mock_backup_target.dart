@@ -18,6 +18,7 @@ class MockBackupTarget implements BackupTargetAbstract {
   AppFault? _nextFailure;
   Duration? _nextDelay;
   Map<String, String?>? _pendingConcurrentWrite;
+  Future<void> Function()? _beforeNextFetch;
   int _seq = 0;
   DateTime _clock = DateTime.utc(2026, 1, 1);
 
@@ -50,6 +51,12 @@ class MockBackupTarget implements BackupTargetAbstract {
       'parentRevisionId': parentRevisionId,
       'deviceLabel': deviceLabel,
     };
+  }
+
+  /// Runs [action] after the next fetch begins but before its body is returned.
+  /// This reproduces local mutation while a remote body is in flight.
+  void beforeNextFetch(Future<void> Function() action) {
+    _beforeNextFetch = action;
   }
 
   Future<void> _gate() async {
@@ -132,6 +139,11 @@ class MockBackupTarget implements BackupTargetAbstract {
   @override
   Future<String> fetch(BackupRevision revision) async {
     await _gate();
+    final beforeFetch = _beforeNextFetch;
+    if (beforeFetch != null) {
+      _beforeNextFetch = null;
+      await beforeFetch();
+    }
     final body = _bodies[revision.id];
     if (body == null) {
       throw AppFault.backup(

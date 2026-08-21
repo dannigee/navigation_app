@@ -221,7 +221,10 @@ class ConfigBundle {
   /// them change. [failAfterWritesForTest] throws after N writes to prove the
   /// rollback works; every write increments the counter, so a failure can be
   /// injected at any materialization step.
-  Future<void> applyTransactionally({int? failAfterWritesForTest}) async {
+  Future<void> applyTransactionally({
+    int? failAfterWritesForTest,
+    bool markAsPending = true,
+  }) async {
     var written = 0;
     void tick() {
       written++;
@@ -266,6 +269,11 @@ class ConfigBundle {
       // Imported state is unprovenanced pending work. The engine
       // re-establishes provenance itself after applying a fetched revision.
       await BackupPointer.clear();
+      if (markAsPending) {
+        // Manual import is a new local snapshot, not a fetched restore. Record
+        // one durable generation while the journal can still roll it back.
+        await ConfigMutationNotifier.instance.notify();
+      }
       await RestoreJournal.clear();
     } catch (error, stackTrace) {
       try {
